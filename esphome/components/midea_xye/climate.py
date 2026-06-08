@@ -69,6 +69,43 @@ CONF_COMPRESSOR_ACTIVE = "compressor_active"
 CONF_FAN_SPEED = "fan_speed"
 CONF_COMPRESSOR_AWARE_ACTION = "compressor_aware_action"
 CONF_SYNC_FAN_MODE_FROM_DEVICE = "sync_fan_mode_from_device"
+# C0 QUERY response trace fields (PROTOCOL.md bytes 6-29)
+CONF_UNKNOWN1 = "unknown1"
+CONF_CAPABILITIES = "capabilities"
+CONF_BUS_OPERATION_MODE = "bus_operation_mode"
+CONF_BUS_FAN_MODE = "bus_fan_mode"
+CONF_BUS_TARGET_TEMPERATURE = "bus_target_temperature"
+CONF_UNKNOWN2 = "unknown2"
+CONF_MODE_FLAGS = "mode_flags"
+CONF_OPERATION_FLAGS = "operation_flags"
+CONF_CCM_ERROR_FLAGS = "ccm_error_flags"
+CONF_UNKNOWN4 = "unknown4"
+CONF_UNKNOWN5 = "unknown5"
+CONF_UNKNOWN6 = "unknown6"
+# C4 QUERY_EXTENDED trace fields
+CONF_C4_INDOOR_FAN_PWM = "c4_indoor_fan_pwm"
+CONF_C4_INDOOR_FAN_TACH = "c4_indoor_fan_tach"
+CONF_C4_COMPRESSOR_FLAGS = "c4_compressor_flags"
+CONF_C4_ESP_PROFILE = "c4_esp_profile"
+CONF_C4_PROTECTION_FLAGS = "c4_protection_flags"
+CONF_C4_COIL_INLET = "c4_coil_inlet"
+CONF_C4_COIL_OUTLET = "c4_coil_outlet"
+CONF_C4_DISCHARGE_TEMP = "c4_discharge_temp"
+CONF_C4_EXPANSION_VALVE = "c4_expansion_valve"
+CONF_C4_SYSTEM_STATUS_FLAGS = "c4_system_status_flags"
+CONF_C4_TARGET_FAN_MODE = "c4_target_fan_mode"
+CONF_C4_COMPRESSOR_FREQUENCY = "c4_compressor_frequency"
+CONF_C4_SUBSYSTEM_COMPRESSOR = "c4_subsystem_compressor"
+CONF_C4_SUBSYSTEM_OUTDOOR_FAN = "c4_subsystem_outdoor_fan"
+CONF_C4_SUBSYSTEM_4WAY_VALVE = "c4_subsystem_4way_valve"
+CONF_C4_SUBSYSTEM_INVERTER = "c4_subsystem_inverter"
+
+DIAGNOSTIC_BYTE_SCHEMA = sensor.sensor_schema(
+    icon="mdi:code-braces",
+    accuracy_decimals=0,
+    state_class=STATE_CLASS_MEASUREMENT,
+    entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+)
 midea_xye_ns = cg.esphome_ns.namespace("midea").namespace("xye")
 ClimateMideaXYE = midea_xye_ns.class_("ClimateMideaXYE", climate.Climate, cg.Component)
 StaticPressureNumber = midea_xye_ns.class_("StaticPressureNumber", number.Number, cg.Component)
@@ -273,6 +310,69 @@ CONFIG_SCHEMA = cv.All(
                 icon="mdi:engine",
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
             ),
+            # --- C0 QUERY (0xC0) receive trace (PROTOCOL.md bytes 6-29) ---
+            cv.Optional(CONF_UNKNOWN1): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_CAPABILITIES): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_BUS_OPERATION_MODE): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_BUS_FAN_MODE): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_BUS_TARGET_TEMPERATURE): sensor.sensor_schema(
+                unit_of_measurement=UNIT_CELSIUS,
+                icon=ICON_THERMOMETER,
+                accuracy_decimals=2,
+                device_class=DEVICE_CLASS_TEMPERATURE,
+                state_class=STATE_CLASS_MEASUREMENT,
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            ),
+            cv.Optional(CONF_UNKNOWN2): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_MODE_FLAGS): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_OPERATION_FLAGS): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_CCM_ERROR_FLAGS): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_UNKNOWN4): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_UNKNOWN5): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_UNKNOWN6): DIAGNOSTIC_BYTE_SCHEMA,
+            # --- C4 QUERY_EXTENDED (0xC4) receive trace ---
+            cv.Optional(CONF_C4_INDOOR_FAN_PWM): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_C4_INDOOR_FAN_TACH): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_C4_COMPRESSOR_FLAGS): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_C4_ESP_PROFILE): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_C4_PROTECTION_FLAGS): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_C4_COIL_INLET): sensor.sensor_schema(
+                unit_of_measurement=UNIT_CELSIUS,
+                icon=ICON_THERMOMETER,
+                accuracy_decimals=2,
+                device_class=DEVICE_CLASS_TEMPERATURE,
+                state_class=STATE_CLASS_MEASUREMENT,
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            ),
+            cv.Optional(CONF_C4_COIL_OUTLET): sensor.sensor_schema(
+                unit_of_measurement=UNIT_CELSIUS,
+                icon=ICON_THERMOMETER,
+                accuracy_decimals=2,
+                device_class=DEVICE_CLASS_TEMPERATURE,
+                state_class=STATE_CLASS_MEASUREMENT,
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            ),
+            cv.Optional(CONF_C4_DISCHARGE_TEMP): sensor.sensor_schema(
+                unit_of_measurement=UNIT_CELSIUS,
+                icon=ICON_THERMOMETER,
+                accuracy_decimals=2,
+                device_class=DEVICE_CLASS_TEMPERATURE,
+                state_class=STATE_CLASS_MEASUREMENT,
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            ),
+            cv.Optional(CONF_C4_EXPANSION_VALVE): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_C4_SYSTEM_STATUS_FLAGS): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_C4_TARGET_FAN_MODE): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_C4_COMPRESSOR_FREQUENCY): sensor.sensor_schema(
+                icon="mdi:sine-wave",
+                accuracy_decimals=0,
+                state_class=STATE_CLASS_MEASUREMENT,
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            ),
+            cv.Optional(CONF_C4_SUBSYSTEM_COMPRESSOR): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_C4_SUBSYSTEM_OUTDOOR_FAN): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_C4_SUBSYSTEM_4WAY_VALVE): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_C4_SUBSYSTEM_INVERTER): DIAGNOSTIC_BYTE_SCHEMA,
         }
     )
     .extend(uart.UART_DEVICE_SCHEMA)
@@ -465,3 +565,37 @@ async def to_code(config):
     if CONF_COMPRESSOR_ACTIVE in config:
         sens = await binary_sensor.new_binary_sensor(config[CONF_COMPRESSOR_ACTIVE])
         cg.add(var.set_compressor_active_sensor(sens))
+    trace_sensors = [
+        (CONF_UNKNOWN1, "set_unknown1_sensor"),
+        (CONF_CAPABILITIES, "set_capabilities_sensor"),
+        (CONF_BUS_OPERATION_MODE, "set_bus_operation_mode_sensor"),
+        (CONF_BUS_FAN_MODE, "set_bus_fan_mode_sensor"),
+        (CONF_BUS_TARGET_TEMPERATURE, "set_bus_target_temperature_sensor"),
+        (CONF_UNKNOWN2, "set_unknown2_sensor"),
+        (CONF_MODE_FLAGS, "set_mode_flags_sensor"),
+        (CONF_OPERATION_FLAGS, "set_operation_flags_sensor"),
+        (CONF_CCM_ERROR_FLAGS, "set_ccm_error_flags_sensor"),
+        (CONF_UNKNOWN4, "set_unknown4_sensor"),
+        (CONF_UNKNOWN5, "set_unknown5_sensor"),
+        (CONF_UNKNOWN6, "set_unknown6_sensor"),
+        (CONF_C4_INDOOR_FAN_PWM, "set_c4_indoor_fan_pwm_sensor"),
+        (CONF_C4_INDOOR_FAN_TACH, "set_c4_indoor_fan_tach_sensor"),
+        (CONF_C4_COMPRESSOR_FLAGS, "set_c4_compressor_flags_sensor"),
+        (CONF_C4_ESP_PROFILE, "set_c4_esp_profile_sensor"),
+        (CONF_C4_PROTECTION_FLAGS, "set_c4_protection_flags_sensor"),
+        (CONF_C4_COIL_INLET, "set_c4_coil_inlet_sensor"),
+        (CONF_C4_COIL_OUTLET, "set_c4_coil_outlet_sensor"),
+        (CONF_C4_DISCHARGE_TEMP, "set_c4_discharge_temp_sensor"),
+        (CONF_C4_EXPANSION_VALVE, "set_c4_expansion_valve_sensor"),
+        (CONF_C4_SYSTEM_STATUS_FLAGS, "set_c4_system_status_flags_sensor"),
+        (CONF_C4_TARGET_FAN_MODE, "set_c4_target_fan_mode_sensor"),
+        (CONF_C4_COMPRESSOR_FREQUENCY, "set_c4_compressor_frequency_sensor"),
+        (CONF_C4_SUBSYSTEM_COMPRESSOR, "set_c4_subsystem_compressor_sensor"),
+        (CONF_C4_SUBSYSTEM_OUTDOOR_FAN, "set_c4_subsystem_outdoor_fan_sensor"),
+        (CONF_C4_SUBSYSTEM_4WAY_VALVE, "set_c4_subsystem_4way_valve_sensor"),
+        (CONF_C4_SUBSYSTEM_INVERTER, "set_c4_subsystem_inverter_sensor"),
+    ]
+    for conf_key, setter in trace_sensors:
+        if conf_key in config:
+            sens = await sensor.new_sensor(config[conf_key])
+            cg.add(getattr(var, setter)(sens))

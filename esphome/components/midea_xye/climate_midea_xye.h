@@ -149,6 +149,34 @@ class ClimateMideaXYE : public PollingComponent, public climate::Climate, public
 #endif
   void set_follow_me_sensor(Sensor *sensor);
   void set_internal_current_temperature_sensor(Sensor *sensor) { this->internal_current_temperature_sensor_ = sensor; }
+  void set_unknown1_sensor(Sensor *sensor) { this->unknown1_sensor_ = sensor; }
+  void set_capabilities_sensor(Sensor *sensor) { this->capabilities_sensor_ = sensor; }
+  void set_bus_operation_mode_sensor(Sensor *sensor) { this->bus_operation_mode_sensor_ = sensor; }
+  void set_bus_fan_mode_sensor(Sensor *sensor) { this->bus_fan_mode_sensor_ = sensor; }
+  void set_bus_target_temperature_sensor(Sensor *sensor) { this->bus_target_temperature_sensor_ = sensor; }
+  void set_unknown2_sensor(Sensor *sensor) { this->unknown2_sensor_ = sensor; }
+  void set_mode_flags_sensor(Sensor *sensor) { this->mode_flags_sensor_ = sensor; }
+  void set_operation_flags_sensor(Sensor *sensor) { this->operation_flags_sensor_ = sensor; }
+  void set_ccm_error_flags_sensor(Sensor *sensor) { this->ccm_error_flags_sensor_ = sensor; }
+  void set_unknown4_sensor(Sensor *sensor) { this->unknown4_sensor_ = sensor; }
+  void set_unknown5_sensor(Sensor *sensor) { this->unknown5_sensor_ = sensor; }
+  void set_unknown6_sensor(Sensor *sensor) { this->unknown6_sensor_ = sensor; }
+  void set_c4_indoor_fan_pwm_sensor(Sensor *sensor) { this->c4_indoor_fan_pwm_sensor_ = sensor; }
+  void set_c4_indoor_fan_tach_sensor(Sensor *sensor) { this->c4_indoor_fan_tach_sensor_ = sensor; }
+  void set_c4_compressor_flags_sensor(Sensor *sensor) { this->c4_compressor_flags_sensor_ = sensor; }
+  void set_c4_esp_profile_sensor(Sensor *sensor) { this->c4_esp_profile_sensor_ = sensor; }
+  void set_c4_protection_flags_sensor(Sensor *sensor) { this->c4_protection_flags_sensor_ = sensor; }
+  void set_c4_coil_inlet_sensor(Sensor *sensor) { this->c4_coil_inlet_sensor_ = sensor; }
+  void set_c4_coil_outlet_sensor(Sensor *sensor) { this->c4_coil_outlet_sensor_ = sensor; }
+  void set_c4_discharge_temp_sensor(Sensor *sensor) { this->c4_discharge_temp_sensor_ = sensor; }
+  void set_c4_expansion_valve_sensor(Sensor *sensor) { this->c4_expansion_valve_sensor_ = sensor; }
+  void set_c4_system_status_flags_sensor(Sensor *sensor) { this->c4_system_status_flags_sensor_ = sensor; }
+  void set_c4_target_fan_mode_sensor(Sensor *sensor) { this->c4_target_fan_mode_sensor_ = sensor; }
+  void set_c4_compressor_frequency_sensor(Sensor *sensor) { this->c4_compressor_frequency_sensor_ = sensor; }
+  void set_c4_subsystem_compressor_sensor(Sensor *sensor) { this->c4_subsystem_compressor_sensor_ = sensor; }
+  void set_c4_subsystem_outdoor_fan_sensor(Sensor *sensor) { this->c4_subsystem_outdoor_fan_sensor_ = sensor; }
+  void set_c4_subsystem_4way_valve_sensor(Sensor *sensor) { this->c4_subsystem_4way_valve_sensor_ = sensor; }
+  void set_c4_subsystem_inverter_sensor(Sensor *sensor) { this->c4_subsystem_inverter_sensor_ = sensor; }
   void set_use_fahrenheit(bool yesno) { this->use_fahrenheit_ = yesno; }
   void set_compressor_aware_action(bool yesno) { this->compressor_aware_action_ = yesno; }
   /// Opt-in: when true, this->fan_mode is updated from C4 target_fan_speed on every extended
@@ -240,11 +268,43 @@ class ClimateMideaXYE : public PollingComponent, public climate::Climate, public
 #endif
   Sensor *follow_me_sensor_{nullptr};
   Sensor *internal_current_temperature_sensor_{nullptr};
+  Sensor *unknown1_sensor_{nullptr};
+  Sensor *capabilities_sensor_{nullptr};
+  Sensor *bus_operation_mode_sensor_{nullptr};
+  Sensor *bus_fan_mode_sensor_{nullptr};
+  Sensor *bus_target_temperature_sensor_{nullptr};
+  Sensor *unknown2_sensor_{nullptr};
+  Sensor *mode_flags_sensor_{nullptr};
+  Sensor *operation_flags_sensor_{nullptr};
+  Sensor *ccm_error_flags_sensor_{nullptr};
+  Sensor *unknown4_sensor_{nullptr};
+  Sensor *unknown5_sensor_{nullptr};
+  Sensor *unknown6_sensor_{nullptr};
+  Sensor *c4_indoor_fan_pwm_sensor_{nullptr};
+  Sensor *c4_indoor_fan_tach_sensor_{nullptr};
+  Sensor *c4_compressor_flags_sensor_{nullptr};
+  Sensor *c4_esp_profile_sensor_{nullptr};
+  Sensor *c4_protection_flags_sensor_{nullptr};
+  Sensor *c4_coil_inlet_sensor_{nullptr};
+  Sensor *c4_coil_outlet_sensor_{nullptr};
+  Sensor *c4_discharge_temp_sensor_{nullptr};
+  Sensor *c4_expansion_valve_sensor_{nullptr};
+  Sensor *c4_system_status_flags_sensor_{nullptr};
+  Sensor *c4_target_fan_mode_sensor_{nullptr};
+  Sensor *c4_compressor_frequency_sensor_{nullptr};
+  Sensor *c4_subsystem_compressor_sensor_{nullptr};
+  Sensor *c4_subsystem_outdoor_fan_sensor_{nullptr};
+  Sensor *c4_subsystem_4way_valve_sensor_{nullptr};
+  Sensor *c4_subsystem_inverter_sensor_{nullptr};
   StaticPressureNumber *static_pressure_number_{nullptr};
   ClimateMode last_on_mode_;
   float internal_temperature_{NAN};
+  /// HEAT or COOL sub-mode last sent while CLIMATE_MODE_HEAT_COOL is selected.
+  OperationMode auto_bus_mode_{OperationMode::COOL};
 
   void ParseResponse();
+  OperationMode get_bus_operation_mode_() const;
+  void sync_auto_bus_mode_();
   uint8_t CalculateSetTime(uint32_t time);
   uint32_t CalculateGetTime(uint8_t time);
   void update_current_temperature_from_sensors_(bool &need_publish);

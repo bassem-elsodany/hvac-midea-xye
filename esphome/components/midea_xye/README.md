@@ -103,7 +103,9 @@ climate:
 ```
 
 # What works
-- Setting mode (off, auto, fan, cool, heat, dry).
+- Setting mode (off, auto/heat_cool, fan, cool, heat, dry). AUTO is implemented in
+  software: the component compares room temperature to the setpoint and sends
+  explicit HEAT or COOL on the bus (indoor units never hold AUTO on the wire).
 - Setting temperature. Can send in C or F. Handles AC results in C or F. Must manually set in YAML.
 - Setting fan mode (auto, low, med, high).
 - Reading inside, outside air temperatures, inside coil temperature, and outside coil temperature.

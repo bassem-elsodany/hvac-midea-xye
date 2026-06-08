@@ -71,7 +71,17 @@ struct XYEAdapter {
                                                    bool defrost_active) noexcept;
 
   /// Returns the XYE OperationMode for the given ESPHome ClimateMode.
+  /// @note CLIMATE_MODE_HEAT_COOL (AUTO) is not a bus mode — use resolve_auto_operation_mode().
   static OperationMode get_operation_mode(climate::ClimateMode mode) noexcept;
+
+  /// Resolve AUTO (heat/cool) into an explicit HEAT or COOL bus command.
+  /// Indoor units never hold AUTO on the wire; the thermostat must compare room
+  /// temperature to the setpoint (see PROTOCOL.md).
+  /// @param current_c     Room temperature in °C.
+  /// @param target_c      Setpoint in °C.
+  /// @param last_bus_mode Last HEAT/COOL command sent; used inside the deadband.
+  static OperationMode resolve_auto_operation_mode(float current_c, float target_c,
+                                                   OperationMode last_bus_mode) noexcept;
 
   /// Returns the XYE FanMode for the given ESPHome ClimateFanMode.
   static FanMode get_fan_mode(climate::ClimateFanMode fan_mode) noexcept;

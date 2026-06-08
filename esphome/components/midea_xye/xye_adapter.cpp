@@ -123,9 +123,28 @@ climate::ClimateAction XYEAdapter::get_climate_action(climate::ClimateMode mode,
   return action;
 }
 
+// PROTOCOL.md "AUTO mode and the indoor unit": the CCM compares room temperature to the
+// setpoint and issues explicit HEAT or COOL SET commands — never 0x80 on the wire.
+OperationMode XYEAdapter::resolve_auto_operation_mode(float current_c, float target_c,
+                                                    OperationMode last_bus_mode) noexcept {
+  if (current_c > target_c + AUTO_MODE_DEADBAND_C)
+    return OperationMode::COOL;
+  if (current_c < target_c - AUTO_MODE_DEADBAND_C)
+    return OperationMode::HEAT;
+  const uint8_t last = static_cast<uint8_t>(last_bus_mode) & OP_MODE_VALUE_MASK;
+  if (last == static_cast<uint8_t>(OperationMode::HEAT) || last == static_cast<uint8_t>(OperationMode::COOL))
+    return last_bus_mode;
+  // No prior sub-mode: bias cool when above setpoint, heat when below, else cool.
+  if (current_c > target_c)
+    return OperationMode::COOL;
+  if (current_c < target_c)
+    return OperationMode::HEAT;
+  return OperationMode::COOL;
+}
+
 OperationMode XYEAdapter::get_operation_mode(climate::ClimateMode mode) noexcept {
   switch (mode) {
-    case ClimateMode::CLIMATE_MODE_HEAT_COOL: return OperationMode::AUTO;
+    case ClimateMode::CLIMATE_MODE_HEAT_COOL: return OperationMode::AUTO;  // not sent on bus; see resolve_auto_operation_mode()
     case ClimateMode::CLIMATE_MODE_FAN_ONLY:  return OperationMode::FAN;
     case ClimateMode::CLIMATE_MODE_DRY:       return OperationMode::DRY;
     case ClimateMode::CLIMATE_MODE_HEAT:      return OperationMode::HEAT;

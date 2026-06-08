@@ -184,6 +184,9 @@ enum class CcmErrorFlags : uint8_t {
  */
 constexpr uint8_t OP_MODE_AUTO_FLAG = 0x10;
 
+/// Hysteresis band (°C) when resolving AUTO into HEAT vs COOL bus commands.
+constexpr float AUTO_MODE_DEADBAND_C = 0.5f;
+
 /**
  * @brief Mask to extract the operation mode value, clearing the auto-mode flag bit.
  * Clears OP_MODE_AUTO_FLAG (0x10) while preserving all other bits.

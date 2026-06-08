@@ -422,3 +422,7 @@ FodyWeavers.xsd
 
 # Claude Code local files
 .claude/
+
+# Local ESPHome device config (secrets stay on this machine / HA only)
+config/secrets.yaml
+.venv/

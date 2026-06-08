@@ -18,6 +18,8 @@ static void set_sensor(Sensor *sensor, float value) {
     sensor->publish_state(value);
 }
 
+static void set_sensor_raw(Sensor *sensor, uint8_t value) { set_sensor(sensor, static_cast<float>(value)); }
+
 static void set_number(number::Number *number, float value) {
   if (number != nullptr && (!number->has_state() || number->state != value))
     number->publish_state(value);
@@ -43,9 +45,24 @@ void ClimateMideaXYE::control(const ClimateCall &call) {
     // Reset Follow-Me initialization flag when mode changes to ensure
     // proper initialization sequence is sent on next Follow-Me update
     followMeInit = false;
+    if (this->mode == ClimateMode::CLIMATE_MODE_HEAT_COOL) {
+      const float current = this->current_temperature.value_or(this->internal_temperature_);
+      if (!std::isnan(current)) {
+        this->auto_bus_mode_ =
+            XYEAdapter::resolve_auto_operation_mode(current, this->target_temperature, this->auto_bus_mode_);
+      }
+    }
   }
-  if (call.get_target_temperature().has_value())
+  if (call.get_target_temperature().has_value()) {
     this->target_temperature = call.get_target_temperature().value();
+    if (this->mode == ClimateMode::CLIMATE_MODE_HEAT_COOL) {
+      const float current = this->current_temperature.value_or(this->internal_temperature_);
+      if (!std::isnan(current)) {
+        this->auto_bus_mode_ =
+            XYEAdapter::resolve_auto_operation_mode(current, this->target_temperature, this->auto_bus_mode_);
+      }
+    }
+  }
   if (call.get_fan_mode().has_value())
     this->fan_mode = call.get_fan_mode().value();
   if (call.get_swing_mode().has_value())
@@ -135,11 +152,31 @@ void ClimateMideaXYE::advance_control_state_(uint8_t cmd_sent) {
   }
 }
 
+OperationMode ClimateMideaXYE::get_bus_operation_mode_() const {
+  if (this->mode != ClimateMode::CLIMATE_MODE_HEAT_COOL)
+    return XYEAdapter::get_operation_mode(this->mode);
+  float current = this->current_temperature.value_or(this->internal_temperature_);
+  if (std::isnan(current))
+    current = this->target_temperature;
+  return XYEAdapter::resolve_auto_operation_mode(current, this->target_temperature, this->auto_bus_mode_);
+}
+
+void ClimateMideaXYE::sync_auto_bus_mode_() {
+  if (this->mode != ClimateMode::CLIMATE_MODE_HEAT_COOL || post_set_grace_ > 0)
+    return;
+  const OperationMode desired = this->get_bus_operation_mode_();
+  if (desired == this->auto_bus_mode_)
+    return;
+  this->auto_bus_mode_ = desired;
+  this->request_set_();
+}
+
 void ClimateMideaXYE::setTransmitParams() {
   tx_data = TransmitData(Command::SET);
   auto &d = tx_data.message.data.standard;
 
-  d.operation_mode = XYEAdapter::get_operation_mode(this->mode);
+  this->auto_bus_mode_ = this->get_bus_operation_mode_();
+  d.operation_mode = this->auto_bus_mode_;
 
   if (this->mode != ClimateMode::CLIMATE_MODE_HEAT_COOL) {
     d.fan_mode = XYEAdapter::get_fan_mode(this->fan_mode.value());
@@ -258,8 +295,10 @@ void ClimateMideaXYE::ParseResponse() {
       const auto &qr = rx_data.message.data.query_response;
       ClimatePreset preset = ClimatePreset::CLIMATE_PRESET_NONE;
 
-      const ClimateMode mode = XYEAdapter::get_climate_mode(qr.operation_mode);
+      const ClimateMode reported_mode = XYEAdapter::get_climate_mode(qr.operation_mode);
       const ClimateFanMode fan_mode = XYEAdapter::get_climate_fan_mode(qr.fan_mode);
+      const ClimateMode mode_for_action =
+          (this->mode == ClimateMode::CLIMATE_MODE_HEAT_COOL) ? ClimateMode::CLIMATE_MODE_HEAT_COOL : reported_mode;
 
       if (static_cast<uint8_t>(qr.mode_flags) & MODE_FLAG_AUX_HEAT)
         preset = ClimatePreset::CLIMATE_PRESET_BOOST;
@@ -272,15 +311,19 @@ void ClimateMideaXYE::ParseResponse() {
         post_set_grace_--;
         ESP_LOGD(Constants::TAG,
                  "Post-SET grace: ignoring reported mode=%d (%u cycle(s) remaining)",
-                 static_cast<int>(mode), post_set_grace_);
-      } else {
-        update_property(this->mode, mode, need_publish);
-        if (mode != ClimateMode::CLIMATE_MODE_OFF) {
-          this->last_on_mode_ = mode;
+                 static_cast<int>(reported_mode), post_set_grace_);
+      } else if (this->mode != ClimateMode::CLIMATE_MODE_HEAT_COOL) {
+        update_property(this->mode, reported_mode, need_publish);
+        if (reported_mode != ClimateMode::CLIMATE_MODE_OFF) {
+          this->last_on_mode_ = reported_mode;
         }
       }
 
-      if (mode != ClimateMode::CLIMATE_MODE_OFF || ForceReadNextCycle == 1) {
+      // PROTOCOL.md: the indoor unit never reports AUTO; while HEAT_COOL is selected the
+      // thermostat (this component) owns the HEAT/COOL sub-mode — do not adopt bus mode.
+
+      if (reported_mode != ClimateMode::CLIMATE_MODE_OFF || this->mode != ClimateMode::CLIMATE_MODE_OFF ||
+          ForceReadNextCycle == 1) {
         // Store the internal temperature from the XYE bus
         this->internal_temperature_ = XYEAdapter::get_temperature(qr.t1_temperature.value);
 
@@ -290,11 +333,14 @@ void ClimateMideaXYE::ParseResponse() {
         // Update current_temperature based on sensor availability
         this->update_current_temperature_from_sensors_(need_publish);
 
-        // Setpoint from C0 (Celsius units). C4 is preferred for Fahrenheit-capable units but
-        // many indoor units reply to C4 with 0xC5 garbage; without C0 the HA setpoint never
-        // tracks the bus and appears "stuck" at the last value the AC actually holds.
-        if (post_set_grace_ == 0 && !this->use_fahrenheit_) {
-          const float incoming_target_temp = XYEAdapter::get_temperature(qr.target_temperature.value);
+        // C0 byte 10 is raw Celsius with SET_TEMP_STATUS_FLAG (0x40) masked — not the
+        // (raw-0x28)/2 sensor encoding used by T1/T2/T3 (PROTOCOL.md Receive Messages).
+        // C4 is preferred for Fahrenheit-capable units but many reply with 0xC5 garbage.
+        // While HEAT_COOL (AUTO) is active the thermostat owns the setpoint; skip bus sync.
+        if (post_set_grace_ == 0 && !this->use_fahrenheit_ &&
+            this->mode != ClimateMode::CLIMATE_MODE_HEAT_COOL) {
+          const float incoming_target_temp =
+              XYEAdapter::get_target_temperature(qr.target_temperature.value, false);
           update_property(this->target_temperature, incoming_target_temp, need_publish);
         }
 
@@ -306,9 +352,11 @@ void ClimateMideaXYE::ParseResponse() {
         const bool defrost_active = this->compressor_aware_action_ &&
                                     XYEAdapter::is_defrost_active(qr.protect_flags.value());
         update_property(this->action,
-                        XYEAdapter::get_climate_action(mode, qr.fan_mode, qr.operation_mode,
+                        XYEAdapter::get_climate_action(mode_for_action, qr.fan_mode, qr.operation_mode,
                                                        compressor_active, defrost_active),
                         need_publish);
+
+        this->sync_auto_bus_mode_();
 
         if ((this->swing_mode != ClimateSwingMode::CLIMATE_SWING_OFF) !=
             (bool) (static_cast<uint8_t>(qr.mode_flags) & MODE_FLAG_SWING))
@@ -342,6 +390,21 @@ void ClimateMideaXYE::ParseResponse() {
       set_binary_sensor(this->compressor_active_sensor_,
                         qr.compressor_running_flag == CompressorRunningFlag::ACTIVE);
 #endif
+
+      // PROTOCOL.md C0 receive bytes 6-29 — publish all fields for bus tracing.
+      set_sensor_raw(this->unknown1_sensor_, qr.unknown1);
+      set_sensor_raw(this->capabilities_sensor_, static_cast<uint8_t>(qr.capabilities));
+      set_sensor_raw(this->bus_operation_mode_sensor_, static_cast<uint8_t>(qr.operation_mode));
+      set_sensor_raw(this->bus_fan_mode_sensor_, static_cast<uint8_t>(qr.fan_mode));
+      set_sensor(this->bus_target_temperature_sensor_,
+                 XYEAdapter::get_target_temperature(qr.target_temperature.value, this->use_fahrenheit_));
+      set_sensor_raw(this->unknown2_sensor_, qr.unknown2);
+      set_sensor_raw(this->mode_flags_sensor_, static_cast<uint8_t>(qr.mode_flags));
+      set_sensor_raw(this->operation_flags_sensor_, static_cast<uint8_t>(qr.operation_flags));
+      set_sensor_raw(this->ccm_error_flags_sensor_, static_cast<uint8_t>(qr.ccm_communication_error_flags));
+      set_sensor_raw(this->unknown4_sensor_, qr.unknown4);
+      set_sensor_raw(this->unknown5_sensor_, qr.unknown5);
+      set_sensor_raw(this->unknown6_sensor_, qr.unknown6);
       break;
     }
     case Command::QUERY_EXTENDED: {
@@ -383,6 +446,26 @@ void ClimateMideaXYE::ParseResponse() {
       // - Bytes 19-20 (0xBCD6): 16-bit compressor frequency or outdoor fan RPM
       // - Bytes 26-29 (0x80): Subsystem OK flags (compressor, outdoor fan, 4-way valve, inverter)
       // The validation has been removed to support all unit models correctly.
+
+      // PROTOCOL.md C4 extended receive — publish all fields for bus tracing.
+      set_sensor_raw(this->c4_indoor_fan_pwm_sensor_, static_cast<uint8_t>(exr.indoor_fan_pwm));
+      set_sensor_raw(this->c4_indoor_fan_tach_sensor_, static_cast<uint8_t>(exr.indoor_fan_tach));
+      set_sensor_raw(this->c4_compressor_flags_sensor_, static_cast<uint8_t>(exr.compressor_flags));
+      set_sensor_raw(this->c4_esp_profile_sensor_, static_cast<uint8_t>(exr.esp_profile));
+      set_sensor_raw(this->c4_protection_flags_sensor_, static_cast<uint8_t>(exr.protection_flags));
+      set_sensor(this->c4_coil_inlet_sensor_, XYEAdapter::get_temperature(exr.coil_inlet_temp.value));
+      set_sensor(this->c4_coil_outlet_sensor_, XYEAdapter::get_temperature(exr.coil_outlet_temp.value));
+      set_sensor(this->c4_discharge_temp_sensor_, XYEAdapter::get_temperature(exr.discharge_temp.value));
+      set_sensor_raw(this->c4_expansion_valve_sensor_, static_cast<uint8_t>(exr.expansion_valve_pos));
+      set_sensor_raw(this->c4_system_status_flags_sensor_, static_cast<uint8_t>(exr.system_status_flags));
+      set_sensor_raw(this->c4_target_fan_mode_sensor_, static_cast<uint8_t>(exr.target_fan_speed));
+      set_sensor(this->c4_compressor_frequency_sensor_,
+                 static_cast<float>(exr.compressor_freq_or_fan_rpm.value()));
+      set_sensor_raw(this->c4_subsystem_compressor_sensor_, static_cast<uint8_t>(exr.subsystem_ok_compressor));
+      set_sensor_raw(this->c4_subsystem_outdoor_fan_sensor_, static_cast<uint8_t>(exr.subsystem_ok_outdoor_fan));
+      set_sensor_raw(this->c4_subsystem_4way_valve_sensor_, static_cast<uint8_t>(exr.subsystem_ok_4way_valve));
+      set_sensor_raw(this->c4_subsystem_inverter_sensor_, static_cast<uint8_t>(exr.subsystem_ok_inverter));
+
       ForceReadNextCycle = 0;
       break;
     }

@@ -65,6 +65,8 @@ int main() {
   // raw 0x1A (26) — flag clear; 0x5A (90 = 64+26) — flag set; both decode to 26°C.
   expect_temp("0x1A -> 26°C (flag clear)",  0x1A, false, 26.0f);
   expect_temp("0x5A -> 26°C (0x40 masked)", 0x5A, false, 26.0f);
+  // Live capture: C0 setpoint 0x18 must decode as 24°C raw, not (0x18-0x28)/2.
+  expect_temp("0x18 -> 24°C (live C0 setpoint)", 0x18, false, 24.0f);
 
   std::printf("\n%d checks, %d failure(s)\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;
