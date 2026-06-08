@@ -1,6 +1,6 @@
 from esphome.core import coroutine
 from esphome import automation
-from esphome.components import binary_sensor, climate, sensor, uart, remote_transmitter, number
+from esphome.components import binary_sensor, climate, sensor, text_sensor, uart, remote_transmitter, number
 from esphome.components.remote_base import CONF_TRANSMITTER_ID
 import esphome.config_validation as cv
 import esphome.codegen as cg
@@ -49,7 +49,7 @@ from esphome.components.climate import (
 
 #CODEOWNERS = ["@dudanov"]
 DEPENDENCIES = ["climate", "uart", "wifi"]
-AUTO_LOAD = ["binary_sensor", "number", "sensor"]
+AUTO_LOAD = ["binary_sensor", "number", "sensor", "text_sensor"]
 CONF_OUTDOOR_TEMPERATURE = "outdoor_temperature"
 CONF_TEMPERATURE_2A = "temperature_2a"
 CONF_TEMPERATURE_2B = "temperature_2b"
@@ -72,8 +72,11 @@ CONF_SYNC_FAN_MODE_FROM_DEVICE = "sync_fan_mode_from_device"
 # C0 QUERY response trace fields (PROTOCOL.md bytes 6-29)
 CONF_UNKNOWN1 = "unknown1"
 CONF_CAPABILITIES = "capabilities"
+CONF_CAPABILITIES_TEXT = "capabilities_text"
 CONF_BUS_OPERATION_MODE = "bus_operation_mode"
+CONF_BUS_OPERATION_MODE_TEXT = "bus_operation_mode_text"
 CONF_BUS_FAN_MODE = "bus_fan_mode"
+CONF_BUS_FAN_MODE_TEXT = "bus_fan_mode_text"
 CONF_BUS_TARGET_TEMPERATURE = "bus_target_temperature"
 CONF_UNKNOWN2 = "unknown2"
 CONF_MODE_FLAGS = "mode_flags"
@@ -104,6 +107,10 @@ DIAGNOSTIC_BYTE_SCHEMA = sensor.sensor_schema(
     icon="mdi:code-braces",
     accuracy_decimals=0,
     state_class=STATE_CLASS_MEASUREMENT,
+    entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+)
+DIAGNOSTIC_TEXT_SCHEMA = text_sensor.text_sensor_schema(
+    icon="mdi:code-braces",
     entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
 )
 midea_xye_ns = cg.esphome_ns.namespace("midea").namespace("xye")
@@ -313,8 +320,11 @@ CONFIG_SCHEMA = cv.All(
             # --- C0 QUERY (0xC0) receive trace (PROTOCOL.md bytes 6-29) ---
             cv.Optional(CONF_UNKNOWN1): DIAGNOSTIC_BYTE_SCHEMA,
             cv.Optional(CONF_CAPABILITIES): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_CAPABILITIES_TEXT): DIAGNOSTIC_TEXT_SCHEMA,
             cv.Optional(CONF_BUS_OPERATION_MODE): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_BUS_OPERATION_MODE_TEXT): DIAGNOSTIC_TEXT_SCHEMA,
             cv.Optional(CONF_BUS_FAN_MODE): DIAGNOSTIC_BYTE_SCHEMA,
+            cv.Optional(CONF_BUS_FAN_MODE_TEXT): DIAGNOSTIC_TEXT_SCHEMA,
             cv.Optional(CONF_BUS_TARGET_TEMPERATURE): sensor.sensor_schema(
                 unit_of_measurement=UNIT_CELSIUS,
                 icon=ICON_THERMOMETER,
@@ -598,4 +608,13 @@ async def to_code(config):
     for conf_key, setter in trace_sensors:
         if conf_key in config:
             sens = await sensor.new_sensor(config[conf_key])
+            cg.add(getattr(var, setter)(sens))
+    trace_text_sensors = [
+        (CONF_CAPABILITIES_TEXT, "set_capabilities_text_sensor"),
+        (CONF_BUS_OPERATION_MODE_TEXT, "set_bus_operation_mode_text_sensor"),
+        (CONF_BUS_FAN_MODE_TEXT, "set_bus_fan_mode_text_sensor"),
+    ]
+    for conf_key, setter in trace_text_sensors:
+        if conf_key in config:
+            sens = await text_sensor.new_text_sensor(config[conf_key])
             cg.add(getattr(var, setter)(sens))

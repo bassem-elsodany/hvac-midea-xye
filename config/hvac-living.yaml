@@ -156,17 +156,27 @@ climate:
       name: "C0 Bus Setpoint"
 
     # Byte 8 — Operation mode the indoor unit reports: 0x00 OFF, 0x81 FAN, 0x82 DRY,
-    # 0x84 HEAT, 0x88 COOL. Never reports AUTO (0x80) — that is thermostat-side only.
+    # 0x84 HEAT, 0x88 COOL. Never reports AUTO (0x80) — AUTO is wall/HA only.
+    # In HA Heat/Cool mode this is the wall's HEAT/COOL sub-mode on the bus, not the HA mode.
     bus_operation_mode:
       name: "C0 Operation Mode Raw"
+    # Human-readable companion, e.g. "136 (COOL)" for 0x88.
+    bus_operation_mode_text:
+      name: "C0 Operation Mode"
 
     # Byte 9 — Actual fan speed bitmask. Bit 7 (0x80) = AUTO fan; lower nibble (0x0F)
     # = current physical speed (0x01 H, 0x02 M, 0x03/0x04 L). Reads 0x00 when fan idle.
     bus_fan_mode:
       name: "C0 Fan Mode Raw"
+    # Human-readable companion, e.g. "130 (AUTO+MEDIUM)" for 0x82.
+    bus_fan_mode_text:
+      name: "C0 Fan Mode"
 
     # Byte 7 — Unit capability flags: 0x10 swing support, 0x80 external/Follow-Me temp.
     capabilities:
+      name: "C0 Capabilities Raw"
+    # Human-readable companion, e.g. "17 (SWING+0x01)" for 0x11.
+    capabilities_text:
       name: "C0 Capabilities"
 
     # Byte 20 — Special modes: 0x01 ECO/SLEEP, 0x02 AUX heat/BOOST, 0x04 swing, 0x88 vent.

@@ -22,6 +22,85 @@ static void set_sensor(Sensor *sensor, float value) {
 
 static void set_sensor_raw(Sensor *sensor, uint8_t value) { set_sensor(sensor, static_cast<float>(value)); }
 
+#ifdef USE_TEXT_SENSOR
+static void set_text_sensor(text_sensor::TextSensor *sensor, const std::string &value) {
+  if (sensor != nullptr && (!sensor->has_state() || sensor->state != value))
+    sensor->publish_state(value);
+}
+
+static const char *fan_speed_nibble_name(uint8_t speed) {
+  switch (speed) {
+    case 0x01:
+      return "HIGH";
+    case 0x02:
+      return "MEDIUM";
+    case 0x03:
+      return "LOW";
+    case 0x04:
+      return "LOW";
+    default:
+      return speed == 0 ? "OFF" : "UNKNOWN";
+  }
+}
+
+static std::string describe_operation_mode_byte(uint8_t raw) {
+  char buf[32];
+  snprintf(buf, sizeof(buf), "%u (%s)", raw, enum_to_string(static_cast<OperationMode>(raw)));
+  return buf;
+}
+
+static std::string describe_fan_mode_byte(uint8_t raw) {
+  char buf[48];
+  const bool auto_fan = (raw & FAN_AUTO_FLAG) != 0;
+  const uint8_t speed = raw & FAN_SPEED_MASK;
+  if (raw == 0) {
+    snprintf(buf, sizeof(buf), "%u (OFF)", raw);
+  } else if (auto_fan && speed != 0) {
+    snprintf(buf, sizeof(buf), "%u (AUTO+%s)", raw, fan_speed_nibble_name(speed));
+  } else if (auto_fan) {
+    snprintf(buf, sizeof(buf), "%u (AUTO)", raw);
+  } else {
+    snprintf(buf, sizeof(buf), "%u (%s)", raw, fan_speed_nibble_name(speed));
+  }
+  return buf;
+}
+
+template<typename EnumType>
+static std::string describe_flag_bits_byte(uint8_t raw, const std::map<EnumType, const char *> &flag_map) {
+  char buf[64];
+  if (raw == 0) {
+    snprintf(buf, sizeof(buf), "0 (NONE)");
+    return buf;
+  }
+  std::string labels;
+  uint8_t remaining = raw;
+  for (const auto &entry : flag_map) {
+    const uint8_t bit = static_cast<uint8_t>(entry.first);
+    if (bit == 0 || (remaining & bit) != bit)
+      continue;
+    if (!labels.empty())
+      labels += '+';
+    labels += entry.second;
+    remaining &= static_cast<uint8_t>(~bit);
+  }
+  if (labels.empty()) {
+    snprintf(buf, sizeof(buf), "%u (UNKNOWN)", raw);
+  } else if (remaining != 0) {
+    char extra[12];
+    snprintf(extra, sizeof(extra), "+0x%02X", remaining);
+    labels += extra;
+    snprintf(buf, sizeof(buf), "%u (%s)", raw, labels.c_str());
+  } else {
+    snprintf(buf, sizeof(buf), "%u (%s)", raw, labels.c_str());
+  }
+  return buf;
+}
+
+static std::string describe_capabilities_byte(uint8_t raw) {
+  return describe_flag_bits_byte(raw, EnumTraits<Capabilities>::get_map());
+}
+#endif
+
 static void set_number(number::Number *number, float value) {
   if (number != nullptr && (!number->has_state() || number->state != value))
     number->publish_state(value);
@@ -478,8 +557,19 @@ void ClimateMideaXYE::ParseResponse() {
       // PROTOCOL.md C0 receive bytes 6-29 — publish all fields for bus tracing.
       set_sensor_raw(this->unknown1_sensor_, qr.unknown1);
       set_sensor_raw(this->capabilities_sensor_, static_cast<uint8_t>(qr.capabilities));
+#ifdef USE_TEXT_SENSOR
+      set_text_sensor(this->capabilities_text_sensor_,
+                      describe_capabilities_byte(static_cast<uint8_t>(qr.capabilities)));
+#endif
       set_sensor_raw(this->bus_operation_mode_sensor_, static_cast<uint8_t>(qr.operation_mode));
+#ifdef USE_TEXT_SENSOR
+      set_text_sensor(this->bus_operation_mode_text_sensor_,
+                      describe_operation_mode_byte(static_cast<uint8_t>(qr.operation_mode)));
+#endif
       set_sensor_raw(this->bus_fan_mode_sensor_, static_cast<uint8_t>(qr.fan_mode));
+#ifdef USE_TEXT_SENSOR
+      set_text_sensor(this->bus_fan_mode_text_sensor_, describe_fan_mode_byte(static_cast<uint8_t>(qr.fan_mode)));
+#endif
       set_sensor(this->bus_target_temperature_sensor_,
                  XYEAdapter::get_target_temperature(qr.target_temperature.value, this->use_fahrenheit_));
       set_sensor_raw(this->unknown2_sensor_, qr.unknown2);

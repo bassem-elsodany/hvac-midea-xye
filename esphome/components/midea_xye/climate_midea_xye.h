@@ -12,6 +12,9 @@
 #ifdef USE_BINARY_SENSOR
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #endif
+#ifdef USE_TEXT_SENSOR
+#include "esphome/components/text_sensor/text_sensor.h"
+#endif
 #include "esphome/core/log.h"
 #include "ir_transmitter.h"
 #include "static_pressure_number.h"
@@ -151,8 +154,19 @@ class ClimateMideaXYE : public PollingComponent, public climate::Climate, public
   void set_internal_current_temperature_sensor(Sensor *sensor) { this->internal_current_temperature_sensor_ = sensor; }
   void set_unknown1_sensor(Sensor *sensor) { this->unknown1_sensor_ = sensor; }
   void set_capabilities_sensor(Sensor *sensor) { this->capabilities_sensor_ = sensor; }
+#ifdef USE_TEXT_SENSOR
+  void set_capabilities_text_sensor(text_sensor::TextSensor *sensor) { this->capabilities_text_sensor_ = sensor; }
+#endif
   void set_bus_operation_mode_sensor(Sensor *sensor) { this->bus_operation_mode_sensor_ = sensor; }
+#ifdef USE_TEXT_SENSOR
+  void set_bus_operation_mode_text_sensor(text_sensor::TextSensor *sensor) {
+    this->bus_operation_mode_text_sensor_ = sensor;
+  }
+#endif
   void set_bus_fan_mode_sensor(Sensor *sensor) { this->bus_fan_mode_sensor_ = sensor; }
+#ifdef USE_TEXT_SENSOR
+  void set_bus_fan_mode_text_sensor(text_sensor::TextSensor *sensor) { this->bus_fan_mode_text_sensor_ = sensor; }
+#endif
   void set_bus_target_temperature_sensor(Sensor *sensor) { this->bus_target_temperature_sensor_ = sensor; }
   void set_unknown2_sensor(Sensor *sensor) { this->unknown2_sensor_ = sensor; }
   void set_mode_flags_sensor(Sensor *sensor) { this->mode_flags_sensor_ = sensor; }
@@ -270,8 +284,17 @@ class ClimateMideaXYE : public PollingComponent, public climate::Climate, public
   Sensor *internal_current_temperature_sensor_{nullptr};
   Sensor *unknown1_sensor_{nullptr};
   Sensor *capabilities_sensor_{nullptr};
+#ifdef USE_TEXT_SENSOR
+  text_sensor::TextSensor *capabilities_text_sensor_{nullptr};
+#endif
   Sensor *bus_operation_mode_sensor_{nullptr};
+#ifdef USE_TEXT_SENSOR
+  text_sensor::TextSensor *bus_operation_mode_text_sensor_{nullptr};
+#endif
   Sensor *bus_fan_mode_sensor_{nullptr};
+#ifdef USE_TEXT_SENSOR
+  text_sensor::TextSensor *bus_fan_mode_text_sensor_{nullptr};
+#endif
   Sensor *bus_target_temperature_sensor_{nullptr};
   Sensor *unknown2_sensor_{nullptr};
   Sensor *mode_flags_sensor_{nullptr};
