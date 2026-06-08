@@ -2,7 +2,9 @@
 
 #include "climate_midea_xye.h"
 
+#include "esphome/components/climate/climate_mode.h"
 #include "esphome/core/log.h"
+#include "xye_log.h"
 
 namespace esphome {
 namespace midea {
@@ -39,36 +41,79 @@ template<typename T> void update_property(T &property, const T &value, bool &fla
   }
 }
 
+static const char *control_state_name(ControlState state) {
+  switch (state) {
+    case ControlState::WAIT_DATA:
+      return "WAIT_DATA";
+    case ControlState::SEND_SET:
+      return "SEND_SET";
+    case ControlState::SEND_FOLLOWME:
+      return "SEND_FOLLOWME";
+    case ControlState::SEND_QUERY:
+      return "SEND_QUERY";
+    case ControlState::SEND_QUERY_EXTENDED:
+      return "SEND_QUERY_EXTENDED";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+static void log_bus_state_transition_(const char *tag, ControlState from, ControlState to, const char *reason,
+                                      uint8_t cmd = 0) {
+  if (cmd != 0) {
+    ESP_LOGD(tag, "Bus %s -> %s (%s, ack=0x%02X)", control_state_name(from), control_state_name(to), reason, cmd);
+  } else {
+    ESP_LOGD(tag, "Bus %s -> %s (%s)", control_state_name(from), control_state_name(to), reason);
+  }
+}
+
 void ClimateMideaXYE::control(const ClimateCall &call) {
   if (call.get_mode().has_value()) {
-    this->mode = call.get_mode().value();
+    const ClimateMode new_mode = call.get_mode().value();
+    ESP_LOGI(Constants::TAG, "HA mode -> %s", LOG_STR_ARG(climate::climate_mode_to_string(new_mode)));
+    this->mode = new_mode;
     // Reset Follow-Me initialization flag when mode changes to ensure
     // proper initialization sequence is sent on next Follow-Me update
     followMeInit = false;
     if (this->mode == ClimateMode::CLIMATE_MODE_HEAT_COOL) {
       const float current = this->get_effective_current_temperature_();
       if (!std::isnan(current)) {
+        const OperationMode prev = this->auto_bus_mode_;
         this->auto_bus_mode_ =
             XYEAdapter::resolve_auto_operation_mode(current, this->target_temperature, this->auto_bus_mode_);
+        ESP_LOGD(Constants::TAG, "AUTO on mode change: room=%.1f°C target=%.1f°C bus %s -> %s", current,
+                 this->target_temperature, enum_to_string(prev), enum_to_string(this->auto_bus_mode_));
       }
     }
   }
   if (call.get_target_temperature().has_value()) {
-    this->target_temperature = call.get_target_temperature().value();
+    const float new_target = call.get_target_temperature().value();
+    ESP_LOGI(Constants::TAG, "HA target -> %.1f°C", new_target);
+    this->target_temperature = new_target;
     if (this->mode == ClimateMode::CLIMATE_MODE_HEAT_COOL) {
       const float current = this->get_effective_current_temperature_();
       if (!std::isnan(current)) {
+        const OperationMode prev = this->auto_bus_mode_;
         this->auto_bus_mode_ =
             XYEAdapter::resolve_auto_operation_mode(current, this->target_temperature, this->auto_bus_mode_);
+        ESP_LOGD(Constants::TAG, "AUTO on target change: room=%.1f°C target=%.1f°C bus %s -> %s", current,
+                 this->target_temperature, enum_to_string(prev), enum_to_string(this->auto_bus_mode_));
       }
     }
   }
-  if (call.get_fan_mode().has_value())
+  if (call.get_fan_mode().has_value()) {
+    ESP_LOGI(Constants::TAG, "HA fan -> %s", LOG_STR_ARG(climate::climate_fan_mode_to_string(call.get_fan_mode().value())));
     this->fan_mode = call.get_fan_mode().value();
-  if (call.get_swing_mode().has_value())
+  }
+  if (call.get_swing_mode().has_value()) {
+    ESP_LOGI(Constants::TAG, "HA swing -> %s",
+             LOG_STR_ARG(climate::climate_swing_mode_to_string(call.get_swing_mode().value())));
     this->swing_mode = call.get_swing_mode().value();
-  if (call.get_preset().has_value())
+  }
+  if (call.get_preset().has_value()) {
+    ESP_LOGI(Constants::TAG, "HA preset -> %s", LOG_STR_ARG(climate::climate_preset_to_string(call.get_preset().value())));
     this->preset = call.get_preset().value();
+  }
   this->publish_state();
   this->request_set_();
 }
@@ -109,9 +154,12 @@ void ClimateMideaXYE::setPowerState(bool state) {
 
 void ClimateMideaXYE::request_set_() {
   if (controlState == ControlState::WAIT_DATA) {
+    ESP_LOGD(Constants::TAG, "Queue SET (queued was %s)", control_state_name(queuedCommand));
     queuedCommand = ControlState::SEND_SET;
   } else {
+    const ControlState prev = controlState;
     controlState = ControlState::SEND_SET;
+    log_bus_state_transition_(Constants::TAG, prev, controlState, "request SET");
   }
 }
 
@@ -126,9 +174,12 @@ void ClimateMideaXYE::request_follow_me_() {
 }
 
 void ClimateMideaXYE::advance_control_state_(uint8_t cmd_sent) {
+  const ControlState prev = controlState;
+
   if (queuedCommand != ControlState::WAIT_DATA) {
     controlState = queuedCommand;
     queuedCommand = ControlState::WAIT_DATA;
+    log_bus_state_transition_(Constants::TAG, prev, controlState, "queued command", cmd_sent);
     return;
   }
 
@@ -150,6 +201,7 @@ void ClimateMideaXYE::advance_control_state_(uint8_t cmd_sent) {
       controlState = ControlState::SEND_QUERY;
       break;
   }
+  log_bus_state_transition_(Constants::TAG, prev, controlState, "cycle", cmd_sent);
 }
 
 float ClimateMideaXYE::get_effective_current_temperature_() const {
@@ -173,6 +225,9 @@ void ClimateMideaXYE::sync_auto_bus_mode_() {
   const OperationMode desired = this->get_bus_operation_mode_();
   if (desired == this->auto_bus_mode_)
     return;
+  const float current = this->get_effective_current_temperature_();
+  ESP_LOGI(Constants::TAG, "AUTO bus switch %s -> %s (room=%.1f°C target=%.1f°C)", enum_to_string(this->auto_bus_mode_),
+           enum_to_string(desired), current, this->target_temperature);
   this->auto_bus_mode_ = desired;
   this->request_set_();
 }
@@ -199,16 +254,21 @@ void ClimateMideaXYE::setTransmitParams() {
       this->preset.value_or(ClimatePreset::CLIMATE_PRESET_NONE), this->swing_mode);
 
   tx_data.update_crc();
+  ESP_LOGD(Constants::TAG, "SET build: bus_mode=%s (0x%02X) fan=%s target=%.1f°C raw=0x%02X flags=0x%02X",
+           enum_to_string(d.operation_mode), static_cast<uint8_t>(d.operation_mode), enum_to_string(d.fan_mode),
+           this->target_temperature, d.target_temperature.value, static_cast<uint8_t>(d.mode_flags));
 }
 
 void ClimateMideaXYE::sendRecv(uint8_t cmdSent) {
   // TODO: Reimplement flow control for manual RS485 flow control chips
   // digitalWrite(ComControlPin, RS485_TX_PIN_VALUE);
-  // Log outgoing message at debug level
+  log_frame_hex(Constants::TAG, ">>>", tx_data.raw, TX_MESSAGE_LENGTH);
   tx_data.print_debug(Constants::TAG, TX_MESSAGE_LENGTH, ESPHOME_LOG_LEVEL_DEBUG);
   this->uart_->write_array(tx_data.raw, TX_MESSAGE_LENGTH);
   this->uart_->flush();
+  const ControlState prev = controlState;
   controlState = ControlState::WAIT_DATA;
+  log_bus_state_transition_(Constants::TAG, prev, controlState, "await response", cmdSent);
   // Delay for response_timeout ms to allow response from the AC unit.
   this->set_timeout("read-result", this->response_timeout, [this, cmdSent]() {
     // digitalWrite(ComControlPin, RS485_RX_PIN_VALUE);
@@ -220,13 +280,15 @@ void ClimateMideaXYE::sendRecv(uint8_t cmdSent) {
       i++;
     }
     if (i == RX_MESSAGE_LENGTH) {
-      // Log incoming message at debug level
+      log_frame_hex(Constants::TAG, "<<<", rx_data.raw, i);
       rx_data.print_debug(i, Constants::TAG, ESPHOME_LOG_LEVEL_DEBUG, this->use_fahrenheit_);
       // Don't parse responses to SET or FOLLOW_ME commands to avoid
       // overwriting the mode we just set. The AC state will be updated
       // on subsequent QUERY cycles.
       if (cmdSent != CLIENT_COMMAND_SET && cmdSent != CLIENT_COMMAND_FOLLOWME) {
         ParseResponse();
+      } else {
+        ESP_LOGD(Constants::TAG, "Skip parse for 0x%02X ack (SET/FOLLOW_ME)", cmdSent);
       }
       this->advance_control_state_(cmdSent);
     } else {
@@ -343,11 +405,23 @@ void ClimateMideaXYE::ParseResponse() {
         // (raw-0x28)/2 sensor encoding used by T1/T2/T3 (PROTOCOL.md Receive Messages).
         // C4 is preferred for Fahrenheit-capable units but many reply with 0xC5 garbage.
         // While HEAT_COOL (AUTO) is active the thermostat owns the setpoint; skip bus sync.
-        if (post_set_grace_ == 0 && !this->use_fahrenheit_ &&
-            this->mode != ClimateMode::CLIMATE_MODE_HEAT_COOL) {
+        {
           const float incoming_target_temp =
               XYEAdapter::get_target_temperature(qr.target_temperature.value, false);
-          update_property(this->target_temperature, incoming_target_temp, need_publish);
+          if (post_set_grace_ == 0 && !this->use_fahrenheit_ &&
+              this->mode != ClimateMode::CLIMATE_MODE_HEAT_COOL) {
+            if (incoming_target_temp != this->target_temperature) {
+              ESP_LOGD(Constants::TAG, "C0 setpoint sync: 0x%02X %.1f°C -> HA (was %.1f°C)",
+                       qr.target_temperature.value, incoming_target_temp, this->target_temperature);
+            }
+            update_property(this->target_temperature, incoming_target_temp, need_publish);
+          } else if (!this->use_fahrenheit_ && incoming_target_temp != this->target_temperature) {
+            const char *reason = post_set_grace_ > 0           ? "post-SET grace"
+                                 : this->mode == ClimateMode::CLIMATE_MODE_HEAT_COOL ? "HEAT_COOL owns setpoint"
+                                                                                     : "fahrenheit/C4 path";
+            ESP_LOGD(Constants::TAG, "C0 setpoint sync skipped (%s): bus 0x%02X %.1f°C HA %.1f°C", reason,
+                     qr.target_temperature.value, incoming_target_temp, this->target_temperature);
+          }
         }
 
         // Compressor/defrost-aware action is opt-in (compressor_aware_action) while the
