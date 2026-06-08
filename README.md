@@ -1,303 +1,502 @@
-# ESPHome-Midea-XYE
+# hvac-midea-xye
 
-ESPHome external component for controlling Midea HVAC systems over the XYE/CCM RS-485 bus. Provides a native Home Assistant climate entity with full mode, fan, and setpoint support.
+ESPHome external component for controlling Midea HVAC systems over the XYE/CCM RS-485 bus. Provides a native Home Assistant climate entity with mode, fan, setpoint, Follow-Me, and bus diagnostic sensors.
+
+This repository is a fork of [HomeOps/ESPHome-Midea-XYE](https://github.com/HomeOps/ESPHome-Midea-XYE) with additional work for a living-room ducted heat pump (ESP32 + RS-485 tap), including native **Heat/Cool (AUTO)** thermostat logic, decision tracing logs, and human-readable C0 bus trace sensors.
+
+## Protocol reference
+
+**[PROTOCOL.md](esphome/components/midea_xye/PROTOCOL.md) is the source of truth** for wire format, byte meanings, and hardware behaviour. Implementation and documentation in this repo should align with it.
+
+Key points (see PROTOCOL.md for full detail):
+
+- C0 **never** reports AUTO (`0x80`); the indoor unit only reports active sub-modes such as **HEAT (`0x84`)** or **COOL (`0x88`)**.
+- When the user selects AUTO, **the thermostat (CCM/ESPHome)** compares room temperature to the setpoint and issues explicit HEAT or COOL SET commands — `0x80` is not sent on the wire.
+
+This fork implements that thermostat role in firmware when `HEAT_COOL` is enabled and selected in Home Assistant (`resolve_auto_operation_mode()` in `xye_adapter.cpp`).
 
 ## Overview
 
-This component communicates with Midea-like air conditioners (heat pumps) via the XYE protocol over RS-485.
-
-For detailed protocol documentation, see [PROTOCOL.md](esphome/components/midea_xye/PROTOCOL.md).
+The component communicates with Midea-like air conditioners (heat pumps) via the XYE protocol over RS-485 at **4800 8N1**.
 
 ### Acknowledgments
 
 Kudos to these projects and people:
+
 - Reverse engineering of the protocol: https://codeberg.org/xye/xye
 - Working implementation using ESP32 by @Bunicutz: https://github.com/Bunicutz/ESP32_Midea_RS485
 - Working implementation by @wtahler: https://github.com/wtahler/esphome-mideaXYE-rs485
 - Fully integrated Midea Climate component: https://github.com/esphome/esphome/tree/dev/esphome/components/midea
 - ESPHome external component foundation by @exciton: https://github.com/exciton/esphome
+- Upstream component: https://github.com/HomeOps/ESPHome-Midea-XYE
 - Key contributions and inspiration by @mdrobnak: https://github.com/mdrobnak/esphome/tree/units_switch
 - Static pressure protocol analysis by @rmounce
-- Home Assistant community discussion and contributions: https://community.home-assistant.io/t/midea-a-c-via-local-xye/857679
-- S1/S2 bus (IDU ↔ outdoor inverter) reverse-engineering by MidATRIX:
-  https://github.com/MidATRIX/midea-s1s2-rs485-monitor — a sibling Midea RS-485
-  protocol on a different bus, useful as a cross-reference for the sensor fields and
-  encoding patterns Midea reuses across its internal protocols. See
-  [PROTOCOL.md → Related Protocols](esphome/components/midea_xye/PROTOCOL.md#related-protocols--s1s2-bus-iduodu)
-  for the side-by-side comparison and which XYE unknowns it helps narrow.
+- Home Assistant community discussion: https://community.home-assistant.io/t/midea-a-c-via-local-xye/857679
+- S1/S2 bus reverse-engineering by MidATRIX (cross-reference for encoding patterns): https://github.com/MidATRIX/midea-s1s2-rs485-monitor
 
-## Hardware Requirements
+## Hardware requirements
 
-- ESP8266 or ESP32 board (e.g., D1 Mini)
-- RS-485 to TTL converter dongle
-- Connection to your Midea HVAC unit's XYE/CCM RS-485 bus
+- ESP8266 or ESP32 board (ESP32 with manual DE/RE flow control is tested in `config/hvac-living.yaml`)
+- RS-485 to TTL converter
+- Connection to the Midea HVAC unit's XYE/CCM RS-485 bus (X / Y / E terminals — separate from the wall DISPLAY chain)
 
 ## Installation
 
-Add this external component to your ESPHome configuration.
-
-**Recommended: pin to a specific release tag for stability:**
+Add this external component to your ESPHome configuration:
 
 ```yaml
 external_components:
-  - source: 
+  - source:
       type: git
-      url: https://github.com/HomeOps/ESPHome-Midea-XYE
-      ref: vX.Y.Z  # replace with the latest release tag
-    components: [midea_xye]
-```
-
-Or use the latest development version from the `main` branch:
-
-```yaml
-external_components:
-  - source: 
-      type: git
-      url: https://github.com/HomeOps/ESPHome-Midea-XYE
+      url: https://github.com/bassem-elsodany/hvac-midea-xye
       ref: main
+    refresh: always   # optional: re-fetch component on every compile
     components: [midea_xye]
 ```
 
-See the [Releases page](https://github.com/HomeOps/ESPHome-Midea-XYE/releases) for available versions and changelogs.
+For stability, pin to a specific commit or tag instead of `main`.
 
-## Configuration
+Upstream releases: https://github.com/HomeOps/ESPHome-Midea-XYE/releases
 
-### Basic Example
+## Complete example — [config/hvac-living.yaml](config/hvac-living.yaml)
+
+ESP32 living-room ducted heat pump — RS-485 tap on X/Y/E, full C0/C4 bus trace sensors, Heat/Cool (AUTO), and debug logging. Adjust pins, IP, and entity IDs for your hardware. `!secret` keys require a local `config/secrets.yaml` (see `config/secrets.yaml.example`).
 
 ```yaml
+# Device identity — ESP hostname, HA entity prefixes, and OTA target name.
+substitutions:
+  name: "hvac-living"                  # ESPHome device name / hostname
+  friendly_name: "Living Room Aircon"  # Shown in Home Assistant UI
+  comment: "ESPHome flashed ESP32 with RS485 attached to living room airconditioner"
+
 esphome:
-  name: heatpump
-  friendly_name: Heatpump
+  name: ${name}
+  name_add_mac_suffix: false    # Stable hostname (hvac-living, not hvac-living-aabbcc)
+  friendly_name: ${friendly_name}
+  comment: ${comment}
 
-esp8266:  # also works with esp32
-  board: d1_mini
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino               # Required by midea_xye (not ESP-IDF)
 
-# Enable logging (but not via UART)
+# Logs over Wi-Fi/API only — UART is dedicated to RS-485 (see uart: below).
 logger:
-  baud_rate: 0
-  # Optional: Enable debug logging for XYE protocol messages
-  # logs:
-  #   midea_xye: DEBUG
+  baud_rate: 0                  # 0 = disable serial logging (frees UART for transceiver)
+  logs:
+    midea_xye: DEBUG            # Bus hex (>>>/<<<), HA commands, AUTO/setpoint decisions
 
+# Home Assistant native API — climate entity + all diagnostic sensors.
+api:
+  encryption:
+    key: !secret hvac_living__encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  use_address: 10.0.20.150      # Fixed IP used by HA ESPHome add-on for OTA/logs
+  manual_ip:
+    static_ip: 10.0.20.150
+    gateway: 10.0.20.1
+    subnet: 255.255.255.0
+  ap:                           # Fallback AP if Wi-Fi fails (commissioning)
+    ssid: "hvac-handler-controller"
+    password: !secret access_point_password
+
+captive_portal:                 # Config page when connected to fallback AP
+
+web_server:
+  port: 80
+  auth:
+    username: !secret web_server_username
+    password: !secret web_server_password
+
+# Custom midea_xye fork — git pull on every compile (refresh: always).
 external_components:
-  - source: 
+  - source:
       type: git
-      url: https://github.com/HomeOps/ESPHome-Midea-XYE
-      ref: v1.0.0  # replace with the latest release tag
+      url: https://github.com/bassem-elsodany/hvac-midea-xye
+      ref: main
+    refresh: always
     components: [midea_xye]
 
-# UART settings for RS-485 converter dongle (required)
+# RS-485 XYE bus — 4800 8N1 half-duplex (PROTOCOL.md Physical Layer)
 uart:
-  tx_pin: TX
-  rx_pin: RX
-  baud_rate: 4800
-  debug:  # If you want to help reverse engineer
-    direction: BOTH
+  tx_pin: GPIO17          # RS-485 transceiver DI
+  rx_pin: GPIO16          # RS-485 transceiver RO
+  baud_rate: 4800         # Fixed by Midea XYE protocol
+  flow_control_pin: GPIO4 # DE/RE direction control (manual RS-485 chip)
+  debug:
+    direction: BOTH       # Log raw UART bytes at ESPHome uart DEBUG level
 
-# Main settings
-climate:
-  - platform: midea_xye
-    name: Heatpump
-    period: 1s                  # Optional. Defaults to 1s
-    timeout: 100ms              # Optional. Defaults to 100ms
-    use_fahrenheit: false       # Optional. Defaults to false
-```
-
-### Follow-Me Example
-
-The Follow-Me feature allows the AC unit to use a remote temperature sensor (like one in your living room) instead of its built-in sensor. This provides better temperature control for the entire room.
-
-```yaml
-# Temperature sensor (example using Home Assistant)
 sensor:
+  # Optional Follow-Me room temperature source (C6 command). When enabled via
+  # follow_me_sensor below, the ESP sends this reading instead of the IDU T1 sensor.
   - platform: homeassistant
-    id: living_room_temp
-    entity_id: sensor.living_room_temperature
+    id: living_room_aircon_follow_me
+    entity_id: sensor.zigbee_temp_living_temperature
+    name: "Living Room Temperature Sensor"
+  - platform: wifi_signal
+    name: ${friendly_name} Wi-Fi Signal
+    update_interval: 60s
+  - platform: uptime
+    name: "Uptime"
+    id: uptime_sec
+    internal: true
+  - platform: template
+    name: ${friendly_name} Uptime Days
+    lambda: |-
+      return (id(uptime_sec).state/60)/60/24;
+    icon: mdi:clock-start
+    unit_of_measurement: days
+    update_interval: 60s
 
 climate:
   - platform: midea_xye
     name: Heatpump
-    follow_me_sensor: living_room_temp  # AC uses this sensor for temperature readings
-```
+    id: heatpump
 
-The component will automatically:
-- Send temperature updates when the sensor value changes
-- Send periodic updates every 30 seconds to keep the AC informed
-- No lambda or automation needed!
+    # --- Bus timing ---
+    period: 1s              # How often the state machine runs (C0→C4→SET→C6 cycle)
+    timeout: 100ms          # UART response wait per command (protocol allows ~100–200ms)
 
+    # --- Unit encoding ---
+    use_fahrenheit: false     # false: Celsius on bus; true: C4 setpoint uses °F offset encoding
 
-### Advanced Configuration
+    # --- Behaviour flags ---
+    beeper: true              # Request audible beep on SET (not all units honour this)
+    compressor_aware_action: false
+    # ^ When true: HA climate action uses C0 byte-19 compressor flag + defrost bit in
+    #   protect_flags. When false (default): fan running implies heating/cooling action.
+    sync_fan_mode_from_device: false
+    # ^ When true: HA fan_mode follows C4 target_fan_speed (commanded speed from wall
+    #   thermostat). C0 fan_mode reads 0x00 while the fan is idle, so C4 is more reliable.
 
-```yaml
-climate:
-  - platform: midea_xye
-    name: Heatpump
-    period: 1s                  # Optional. Defaults to 1s
-    timeout: 100ms              # Optional. Defaults to 100ms
-    use_fahrenheit: false       # Optional. Defaults to false
-    #beeper: true               # Optional. Beep on commands
-    visual:                     # Optional. Example of visual settings override
-      min_temperature: 17 °C    # min: 17
-      max_temperature: 30 °C    # max: 30
-      temperature_step: 1.0 °C  # min: 0.5
-    supported_modes:            # Optional
+    # --- Home Assistant UI limits (does not change bus encoding) ---
+    visual:
+      min_temperature: 20 °C
+      max_temperature: 26 °C
+      temperature_step: 1.0 °C
+
+    # Modes sent on the bus as C3 SET operation_mode byte:
+    # OFF=0x00, FAN=0x81, DRY=0x82, HEAT=0x84, COOL=0x88. HEAT_COOL (AUTO) is not a bus
+    # mode — the ESP compares room temp vs setpoint and sends HEAT or COOL instead.
+    supported_modes:
       - FAN_ONLY
-      - HEAT_COOL
+      - HEAT_COOL       # AUTO: thermostat logic in firmware (HEAT/COOL sub-modes on bus)
       - COOL
       - HEAT
       - DRY
-    # NOTE: Experimental / not yet fully implemented:
-    #   - SILENT and TURBO fan modes are defined but currently not used in the
-    #     device control logic and may have no effect.
-    custom_fan_modes:           # Optional
+
+    # Experimental — defined in YAML but not fully wired in control logic yet:
+    custom_fan_modes:
       - SILENT
       - TURBO
-    # NOTE: Experimental / not yet fully implemented:
-    #   - Presets such as BOOST and SLEEP are defined but currently not used in
-    #     the device control logic and may have no effect.
-    supported_presets:          # Optional
+    supported_presets:    # Maps to C0/C3 mode_flags: ECO=0x01, AUX_HEAT/BOOST=0x02
       - BOOST
       - SLEEP
-    supported_swing_modes:      # Optional
+    supported_swing_modes:  # Maps to mode_flags SWING bit 0x04
       - VERTICAL
-    follow_me_sensor: room_temp_sensor  # Optional. Automatically sends room temperature to AC for better temperature control
-                                        # The sensor is updated on state change and every 30 seconds
-    outdoor_temperature:        # Optional. Outdoor temperature sensor
-      name: Outside Temp
-    temperature_2a:             # Optional. Inside coil temperature
-      name: Inside Coil Inlet Temp
-    temperature_2b:             # Optional. Inside coil temperature
-      name: Inside Coil Outlet Temp
-    temperature_3:              # Optional. Outside coil temperature
-      name: Outside Coil Temp
-    current:                    # Optional. Current measurement
-      name: Current
-    timer_start:                # Optional. On timer duration
-      name: Timer Start
-    timer_stop:                 # Optional. Off timer duration
-      name: Timer Stop
-    error_flags:                # Optional
-      name: Error Flags
-    protect_flags:              # Optional
-      name: Protect Flags
-    fan_speed:                  # Optional. Physical fan speed (0=off, 1=low, 2=medium, 3=high)
-      name: Fan Speed
-    defrost:                    # Optional. True while the indoor unit is running a defrost cycle
-      name: Defrost Active
-    compressor_active:          # Optional. True while the compressor is running
-      name: Compressor Active
-    compressor_aware_action: false  # Optional. Opt-in: derive heating/cooling/idle action
-                                    # from the compressor + defrost state. Default false
-                                    # (legacy: fan running implies heating/cooling).
-    sync_fan_mode_from_device: false  # Optional. Opt-in: update the HA fan mode from the
-                                      # physical thermostat's commanded speed (C4 packet).
-                                      # Default false (HA fan mode only changes on HA commands).
+
+    # Uncomment to use the Zigbee room sensor for Follow-Me (C6) instead of IDU T1:
+    #follow_me_sensor: living_room_aircon_follow_me
+
+    #
+    # --- C0 QUERY response (command 0xC0, 32-byte RX frame, data bytes 6–29) ---
+    # Published every valid C0 poll. Raw enum sensors show the on-wire byte value.
+    #
+
+    # Byte 11 — T1 internal/room temperature. Encoded: °C = (raw − 0x28) / 2.
+    # Also drives climate.current_temperature when no follow_me_sensor is set.
+    internal_current_temperature:
+      name: "C0 T1 Room Temp"
+
+    # Byte 10 — Target setpoint on the bus (raw °C + status bit 0x40 masked out).
+    # May differ from HA target when wall thermostat is bus master or during grace period.
+    bus_target_temperature:
+      name: "C0 Bus Setpoint"
+
+    # Byte 8 — Operation mode the indoor unit reports: 0x00 OFF, 0x81 FAN, 0x82 DRY,
+    # 0x84 HEAT, 0x88 COOL. Never reports AUTO (0x80) — AUTO is wall/HA only.
+    # In HA Heat/Cool mode this is the wall's HEAT/COOL sub-mode on the bus, not the HA mode.
+    bus_operation_mode:
+      name: "C0 Operation Mode Raw"
+    # Human-readable companion, e.g. "136 (COOL)" for 0x88.
+    bus_operation_mode_text:
+      name: "C0 Operation Mode"
+
+    # Byte 9 — Actual fan speed bitmask. Bit 7 (0x80) = AUTO fan; lower nibble (0x0F)
+    # = current physical speed (0x01 H, 0x02 M, 0x03/0x04 L). Reads 0x00 when fan idle.
+    bus_fan_mode:
+      name: "C0 Fan Mode Raw"
+    # Human-readable companion, e.g. "130 (AUTO+MEDIUM)" for 0x82.
+    bus_fan_mode_text:
+      name: "C0 Fan Mode"
+
+    # Byte 7 — Unit capability flags: 0x10 swing support, 0x80 external/Follow-Me temp.
+    capabilities:
+      name: "C0 Capabilities Raw"
+    # Human-readable companion, e.g. "17 (SWING+0x01)" for 0x11.
+    capabilities_text:
+      name: "C0 Capabilities"
+
+    # Byte 20 — Special modes: 0x01 ECO/SLEEP, 0x02 AUX heat/BOOST, 0x04 swing, 0x88 vent.
+    mode_flags:
+      name: "C0 Mode Flags"
+
+    # Byte 21 — Status flags: 0x04 water pump active, 0x80 water lock protection.
+    operation_flags:
+      name: "C0 Operation Flags"
+
+    # Byte 12 — T2A indoor coil inlet (refrigerant entering coil). Same T encoding as T1.
+    temperature_2a:
+      name: "C0 T2A Coil Inlet"
+
+    # Byte 13 — T2B indoor coil outlet (refrigerant leaving coil).
+    temperature_2b:
+      name: "C0 T2B Coil Outlet"
+
+    # Byte 14 — T3 outdoor coil / ambient temperature at IDU.
+    temperature_3:
+      name: "C0 T3 Outdoor Coil"
+
+    # Byte 15 — Compressor current draw (often 0xFF = not available on this IDU model).
+    current:
+      name: "C0 Current Raw"
+
+    # Bytes 17–18 — On/off timer bit flags (combinable: 0x01=15m, 0x02=30m, 0x04=1h …).
+    timer_start:
+      name: "C0 Timer Start"
+    timer_stop:
+      name: "C0 Timer Stop"
+
+    # Bytes 22–23 — 16-bit E1/E2 error code bitfield (model-specific service manual).
+    error_flags:
+      name: "C0 Error Flags"
+
+    # Bytes 24–25 — 16-bit protection bitfield. Bit 0x0002 = defrost active (see defrost:).
+    protect_flags:
+      name: "C0 Protect Flags"
+
+    # Byte 26 — Bus communication errors: 0x01 timeout, 0x02 CRC, 0x04 protocol.
+    ccm_error_flags:
+      name: "C0 CCM Error Flags"
+
+    # Derived from byte 9 lower nibble — monotonic ordinal: 0=off, 1=low, 2=med, 3=high.
+    fan_speed:
+      name: "C0 Fan Speed Level"
+
+    # Byte 6 — Reserved/unknown (often 0x30 on some units; capabilities-related).
+    unknown1:
+      name: "C0 Unknown1"
+
+    # Byte 16 — Reserved/unknown.
+    unknown2:
+      name: "C0 Unknown2"
+
+    # Byte 27 — Hardware-dependent steady byte (0x00 or 0x14 observed; model class?).
+    unknown4:
+      name: "C0 Unknown4"
+
+    # Byte 28 — Drifts over time; hypotheses: EEV position low byte or oil-return cycle.
+    unknown5:
+      name: "C0 Unknown5"
+
+    # Byte 29 — Hardware-dependent steady byte (often 0x01 on ducted units).
+    unknown6:
+      name: "C0 Unknown6"
+
+    # Decoded from protect_flags bit 0x0002 — refrigeration defrost cycle in progress.
+    defrost:
+      name: "C0 Defrost Active"
+
+    # Byte 19 — Provisional compressor-running flag: 0x01 running, 0x00 idle (heat captures).
+    compressor_active:
+      name: "C0 Compressor Run Flag"
+
+    #
+    # --- C4 QUERY_EXTENDED response (command 0xC4, data bytes 6–29) ---
+    # Only populated when the unit replies 0xC4. Some units reply 0xC5 with garbage instead.
+    #
+
+    # Byte 15 (data offset) — Outdoor ambient temperature. Same (raw−0x28)/2 encoding.
+    outdoor_temperature:
+      name: "C4 Outdoor Temp"
+
+    # Byte 18 — External static pressure (ESP) profile level, lower 4 bits (0–15).
+    # Writable via static_pressure number when unit is OFF (C6 Follow-Me frame).
+    static_pressure:
+      name: "C4 Static Pressure"
+      min_value: 0
+      max_value: 15
+
+    # Byte 11 — Commanded fan speed (persists when fan idle). Same encoding as C0 fan_mode
+    # but holds the user's selection: 0x01 H, 0x02 M, 0x03/0x04 L, 0x80 AUTO.
+    c4_target_fan_mode:
+      name: "C4 Target Fan Mode Raw"
+
+    # Byte 2 — Compressor status bitmask. Bit 7 (0x80) = compressor active/running.
+    c4_compressor_flags:
+      name: "C4 Compressor Flags"
+
+    # Bytes 13–14 — 16-bit big-endian engineering value: compressor Hz or outdoor fan RPM.
+    c4_compressor_frequency:
+      name: "C4 Compressor Freq or RPM"
+
+    # Byte 3 — External static pressure airflow profile: 0x10 low, 0x30 medium, 0x50 high ESP.
+    c4_esp_profile:
+      name: "C4 ESP Profile"
+
+    # Byte 4 — Protection + outdoor fan state: 0x80 outdoor fan running, 0x8C compressor active.
+    c4_protection_flags:
+      name: "C4 Protection Flags"
+
+    # Byte 10 — System status: bit 7 (0x80) enabled, bit 2 (0x04) wired controller present.
+    c4_system_status_flags:
+      name: "C4 System Status Flags"
+
+    # Byte 0 — Indoor fan PWM duty (0–255; 0x00 = not exposed on some models).
+    c4_indoor_fan_pwm:
+      name: "C4 Indoor Fan PWM"
+
+    # Byte 1 — Indoor fan tachometer feedback (0x00 = not exposed on some models).
+    c4_indoor_fan_tach:
+      name: "C4 Indoor Fan Tach"
+
+    # Byte 5 — Evaporator coil inlet temperature (0x00 unused on some models).
+    c4_coil_inlet:
+      name: "C4 Coil Inlet Temp"
+
+    # Byte 6 — Evaporator coil outlet temperature.
+    c4_coil_outlet:
+      name: "C4 Coil Outlet Temp"
+
+    # Byte 7 — Compressor discharge line temperature.
+    c4_discharge_temp:
+      name: "C4 Discharge Temp"
+
+    # Byte 8 — Electronic expansion valve (EEV) position (0–255 steps).
+    c4_expansion_valve:
+      name: "C4 Expansion Valve"
+
+    # Byte 20 — Compressor subsystem OK flag (0x80 = OK; other bits = protection states).
+    c4_subsystem_compressor:
+      name: "C4 Subsystem Compressor OK"
+
+    # Byte 21 — Outdoor fan subsystem OK flag.
+    c4_subsystem_outdoor_fan:
+      name: "C4 Subsystem Outdoor Fan OK"
+
+    # Byte 22 — 4-way reversing valve subsystem OK flag.
+    c4_subsystem_4way_valve:
+      name: "C4 Subsystem 4-Way Valve OK"
+
+    # Byte 23 — Inverter drive subsystem OK flag.
+    c4_subsystem_inverter:
+      name: "C4 Subsystem Inverter OK"
+
+# Internal switch required by the midea_xye component build — not user-facing.
+switch:
+  - platform: template
+    name: "RS485 Active"
+    id: rs485_active
+    optimistic: true
+    internal: true
+    restore_mode: ALWAYS_ON
 ```
+
+Compile and flash from the `config/` directory:
+
+```bash
+esphome compile config/hvac-living.yaml
+esphome run config/hvac-living.yaml
+```
+
+### Heat/Cool (AUTO)
+
+Per PROTOCOL.md, AUTO is not a bus mode. Enable `HEAT_COOL` in `supported_modes` and select **Heat/Cool** in Home Assistant. The component:
+
+1. Keeps HA in `CLIMATE_MODE_HEAT_COOL`.
+2. Compares room temperature to the setpoint (±0.5 °C deadband).
+3. Sends **`0x88` COOL** or **`0x84` HEAT** in C3 SET frames (never `0x80`).
+4. Sets fan to AUTO during Heat/Cool.
+5. Ignores C0 bus mode/setpoint adoption while Heat/Cool is active (wall sub-mode may still appear on C0).
+
+HA may show **Cooling** or **Heating** as the *action* while mode remains Heat/Cool — that is expected when the room is above or below the setpoint.
+
+**Dual bus masters:** A connected Midea wall controller on the DISPLAY/XYE bus can still change C0 readings. For single-master HA control, disconnect the wall from the DISPLAY chain.
+
+**Follow-Me:** Uncomment `follow_me_sensor` in the complete example to send a Home Assistant room sensor via C6 instead of IDU T1 (updates on change and every 30 seconds).
+
+**Bus trace text sensors** in the example decode raw bytes for HA, e.g. `136 (COOL)`, `130 (AUTO+MEDIUM)`, `17 (SWING+0x01)`.
+
+Experimental YAML entries (`SILENT`/`TURBO` fan modes, `BOOST`/`SLEEP` presets) are defined but not fully wired in control logic.
 
 ## Debugging
 
-### Enabling Protocol Debug Logging
-
-To see detailed XYE protocol messages (useful for troubleshooting or protocol reverse engineering), enable debug logging for the component:
+Enable component debug logging:
 
 ```yaml
 logger:
-  baud_rate: 0  # Required: Disable UART logging to avoid conflicts with RS-485
+  baud_rate: 0
   logs:
-    midea_xye: DEBUG  # Enable debug-level logging for XYE protocol
+    midea_xye: DEBUG
 ```
 
-With debug logging enabled, you'll see:
-- **TX Messages**: Outgoing messages sent to the HVAC unit (operation mode, fan mode, target temperature, etc.)
-- **RX Messages**: Incoming messages from the HVAC unit (current state, temperatures, flags, etc.)
-- All field values are shown in hex format (e.g., `0x50 (20.0°C)`)
-- Enum values show both name and hex (e.g., `0x88 (COOL)` or `0x99 (UNKNOWN)`)
-- Bounds checking prevents displaying garbage data from truncated messages
+Useful log lines:
 
-Example debug output:
-```
-[D][midea_xye:186] TX Message:
-[D][midea_xye:186]   Frame Header:
-[D][midea_xye:186]     command: 0xC0 (QUERY)
-[D][midea_xye:186]   TransmitMessageData:
-[D][midea_xye:186]     operation_mode: 0x88 (COOL)
-[D][midea_xye:186]     fan_mode: 0x80 (FAN_AUTO)
-[D][midea_xye:186]     target_temperature: 0x50 (20.0°C)
+- **INFO:** `HA mode ->`, `HA target ->`, `AUTO bus switch`
+- **DEBUG:** compact hex `>>> AA:C3:...` / `<<< AA:C0:...`, `SET build: bus_mode=COOL (0x88) ...`
+
+Stream logs over the API (UART is on RS-485):
+
+```bash
+esphome logs config/hvac-living.yaml --device <ESP_IP>
 ```
 
 ## Features
 
-### What Works
-- Setting mode (off, fan, cool, heat, dry, auto/HEAT_COOL; see note below — this does not make the indoor unit switch modes on its own)
-- Setting temperature (can send in Celsius or Fahrenheit; handles AC results in both; must manually set in YAML)
-- Setting fan mode (auto, low, medium, high)
-- Reading inside and outside air temperatures
-- Reading inside coil temperature and outside coil temperature
-- Reading timer start/stop times (set by remote)
-- Follow-Me temperature - automatically sends room temperature from a configured sensor to the AC unit. Updates on sensor state changes and every 30 seconds.
-- Reading current mode (HEAT or COOL) as commanded by the Midea proprietary thermostat when one is connected to the XYE bus
+### What works
 
-> **Note on AUTO mode:** The **indoor unit itself has no AUTO mode** — it can only ever be
-> in HEAT or COOL. The apparent "AUTO" behaviour comes entirely from the **Midea proprietary
-> thermostat (tstat)**, which contains its own internal temperature sensor and runs the
-> switching logic on-device: it periodically sends HEAT or COOL commands to the indoor unit
-> based on that sensor reading.  When the Midea tstat is disconnected from the bus the indoor
-> unit stays in whichever mode it was last commanded — it will **never** switch on its own.
-> This component can read the current HEAT/COOL state that the tstat commanded, but has no
-> access to the tstat's internal sensor and cannot replicate its logic.  See the
-> [Smart Thermostat](#smart-thermostat) section below for a Home Assistant–level replacement.
+- Modes: off, fan, cool, heat, dry, **heat/cool (AUTO)** — AUTO sends explicit `0x84`/`0x88` per PROTOCOL.md
+- Temperature setpoint (Celsius or Fahrenheit via `use_fahrenheit`)
+- Fan mode (auto, low, medium, high)
+- Inside/outside and coil temperatures (C0/C4 where supported)
+- Timer start/stop readback
+- Follow-Me (C6) from a configured sensor
+- C0/C4 bus trace sensors (raw + decoded text)
+- Compressor active / defrost binary sensors
+- Decision tracing for commissioning
 
-### Known Issues
-- Current reading always shows 255
-- Setting swing mode not working
+### Known issues
 
-### Not Yet Implemented
-- Setting timers directly to unit (not a high priority since automations can handle this)
-- Forcing display to show Celsius or Fahrenheit (setting temp in Celsius doesn't force display to Celsius)
-- Freeze protection
-- Silent mode
-- Lock/Unlock
+- `current` often reads `255` (`0xFF` — not available on some IDU models)
+- C4 QUERY_EXTENDED may return `0xC5` garbage on some units (ignore C4 sensors)
+- Setting swing mode not fully working
+- Wall DISPLAY path and XYE bus path are independent — wall LCD may not follow ESP SETs
 
-### Not Tested
-- IR integration (however, not needed for Follow-Me functionality)
+### Not yet implemented
 
-## Smart Thermostat
+- Setting timers directly on the unit
+- Forcing display units (C/F on wall)
+- Freeze protection, silent mode, lock/unlock
 
-### Why AUTO mode requires a smart thermostat component
+### Not tested
 
-The **Midea indoor unit has no AUTO mode of its own** — it can only operate in HEAT or COOL
-(or FAN, DRY, OFF). The switching logic that makes it feel like "auto" lives entirely inside
-the **Midea proprietary thermostat (tstat)**, a separate device connected to the same XYE/CCM
-RS-485 bus. The tstat carries its own internal temperature sensor and runs a simple control
-loop on-device: when the room is too cold it sends a HEAT command to the indoor unit; when the
-room is too warm it sends a COOL command. The indoor unit just obeys.
+- IR integration (not required for Follow-Me)
 
-**If you remove the Midea tstat from the bus, the indoor unit will never switch between HEAT
-and COOL on its own** — it stays in whichever mode it received last.
+## Optional: HASS Smart Climate
 
-This ESP component cannot replicate the tstat's role because:
-
-1. The tstat's internal sensor is proprietary and inaccessible over the XYE bus.
-2. The component does not currently implement the built-in smart thermostat control loop that
-   periodically decides when to send the HEAT/COOL switching commands the tstat normally provides.
-
-A software replacement that replicates exactly what the Midea tstat does — but using
-Home Assistant sensors instead of the proprietary hardware sensor, and adding configurable
-comfort bands, named presets (Home / Sleep / Away), and outside-temperature awareness — is the
-companion HACS component:
-
-👉 **[HomeOps/HASS-Smart-Climate](https://github.com/HomeOps/HASS-Smart-Climate)**
-
-Install it via HACS, point it at the climate entity created by this component (for example,
-`climate.<your_name>`), and configure your comfort temperature ranges for each preset. The
-smart thermostat then drives the real device, sending HEAT or COOL commands exactly as the
-Midea tstat would, while keeping its setpoint at the midpoint of the active range.
+[HomeOps/HASS-Smart-Climate](https://github.com/HomeOps/HASS-Smart-Climate) is a Home Assistant companion that adds comfort bands, named presets (Home / Sleep / Away), and outside-temperature awareness on top of the climate entity. PROTOCOL.md references it as one way to implement AUTO logic in Home Assistant; **this fork already provides basic Heat/Cool AUTO in the ESPHome component** as the CCM/ESPHome thermostat described in the protocol. Smart Climate is optional for richer scheduling and preset behaviour.
 
 ## Community
 
-For additional guidance and community support, visit the Home Assistant Community discussion:
 https://community.home-assistant.io/t/midea-a-c-via-local-xye/857679
 
 ## License
 
-See [LICENSE](LICENSE) file for details.
+See [LICENSE](LICENSE).
