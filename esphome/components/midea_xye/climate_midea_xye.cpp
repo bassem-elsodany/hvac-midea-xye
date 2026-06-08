@@ -290,8 +290,13 @@ void ClimateMideaXYE::ParseResponse() {
         // Update current_temperature based on sensor availability
         this->update_current_temperature_from_sensors_(need_publish);
 
-        // Target temperature is read exclusively from C4 (QUERY_EXTENDED) to handle both
-        // Celsius and Fahrenheit encodings consistently. C0 target_temperature is not used.
+        // Setpoint from C0 (Celsius units). C4 is preferred for Fahrenheit-capable units but
+        // many indoor units reply to C4 with 0xC5 garbage; without C0 the HA setpoint never
+        // tracks the bus and appears "stuck" at the last value the AC actually holds.
+        if (post_set_grace_ == 0 && !this->use_fahrenheit_) {
+          const float incoming_target_temp = XYEAdapter::get_temperature(qr.target_temperature.value);
+          update_property(this->target_temperature, incoming_target_temp, need_publish);
+        }
 
         // Compressor/defrost-aware action is opt-in (compressor_aware_action) while the
         // C0 byte-19 compressor flag is still provisional. When disabled, compressor_active=true
