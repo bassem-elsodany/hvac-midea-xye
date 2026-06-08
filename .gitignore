@@ -425,4 +425,5 @@ FodyWeavers.xsd
 
 # Local ESPHome device config (secrets stay on this machine / HA only)
 config/secrets.yaml
+config/.esphome/
 .venv/
