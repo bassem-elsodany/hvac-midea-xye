@@ -69,6 +69,8 @@ CONF_COMPRESSOR_ACTIVE = "compressor_active"
 CONF_FAN_SPEED = "fan_speed"
 CONF_COMPRESSOR_AWARE_ACTION = "compressor_aware_action"
 CONF_SYNC_FAN_MODE_FROM_DEVICE = "sync_fan_mode_from_device"
+CONF_UNIT_ID = "unit_id"
+CONF_MASTER_ID = "master_id"
 # C0 QUERY response trace fields (PROTOCOL.md bytes 6-29)
 CONF_UNKNOWN1 = "unknown1"
 CONF_CAPABILITIES = "capabilities"
@@ -194,6 +196,14 @@ CONFIG_SCHEMA = cv.All(
             # physical thermostat), so Home Assistant reflects fan mode changes even when
             # not triggered by an HA command.
             cv.Optional(CONF_SYNC_FAN_MODE_FROM_DEVICE, default=False): cv.boolean,
+            # Destination/indoor-unit address used in outgoing frames. Default 0x00 matches the
+            # protocol's typical single-unit value; use 0x00..0x3F to target a specific unit or
+            # 0xFF to broadcast.
+            cv.Optional(CONF_UNIT_ID, default=0x00): cv.Any(
+                cv.int_range(min=0x00, max=0x3F), cv.int_(0xFF)
+            ),
+            # Source/master address advertised by this controller in outgoing frames (0x00..0x3F).
+            cv.Optional(CONF_MASTER_ID, default=0x00): cv.int_range(min=0x00, max=0x3F),
             cv.OnlyWith(CONF_TRANSMITTER_ID, "remote_transmitter"): cv.use_id(
                 remote_transmitter.RemoteTransmitterComponent
             ),
@@ -505,6 +515,8 @@ async def to_code(config):
     cg.add(var.set_use_fahrenheit(config[CONF_USE_FAHRENHEIT]))
     cg.add(var.set_compressor_aware_action(config[CONF_COMPRESSOR_AWARE_ACTION]))
     cg.add(var.set_sync_fan_mode_from_device(config[CONF_SYNC_FAN_MODE_FROM_DEVICE]))
+    cg.add(var.set_unit_id(config[CONF_UNIT_ID]))
+    cg.add(var.set_master_id(config[CONF_MASTER_ID]))
     if CONF_TRANSMITTER_ID in config:
         cg.add_define("USE_REMOTE_TRANSMITTER")
         transmitter_ = await cg.get_variable(config[CONF_TRANSMITTER_ID])

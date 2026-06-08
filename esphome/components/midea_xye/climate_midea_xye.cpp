@@ -312,7 +312,7 @@ void ClimateMideaXYE::sync_auto_bus_mode_() {
 }
 
 void ClimateMideaXYE::setTransmitParams() {
-  tx_data = TransmitData(Command::SET);
+  tx_data = TransmitData(Command::SET, this->server_id_, this->client_id_);
   auto &d = tx_data.message.data.standard;
 
   this->auto_bus_mode_ = this->get_bus_operation_mode_();
@@ -410,14 +410,14 @@ void ClimateMideaXYE::update() {
       break;
     }
     case ControlState::SEND_QUERY: {
-      tx_data = TransmitData(Command::QUERY);
+      tx_data = TransmitData(Command::QUERY, this->server_id_, this->client_id_);
       tx_data.update_crc();
       cmdSent = CLIENT_COMMAND_QUERY;
       sendRecv(cmdSent);
       break;
     }
     case ControlState::SEND_QUERY_EXTENDED: {
-      tx_data = TransmitData(Command::QUERY_EXTENDED);
+      tx_data = TransmitData(Command::QUERY_EXTENDED, this->server_id_, this->client_id_);
       tx_data.update_crc();
       cmdSent = CLIENT_COMMAND_QUERY_EXTENDED;
       sendRecv(cmdSent);
@@ -443,7 +443,8 @@ void ClimateMideaXYE::ParseResponse() {
       ClimatePreset preset = ClimatePreset::CLIMATE_PRESET_NONE;
 
       const ClimateMode reported_mode = XYEAdapter::get_climate_mode(qr.operation_mode);
-      const ClimateFanMode fan_mode = XYEAdapter::get_climate_fan_mode(qr.fan_mode);
+      // Fan mode is owned by the C4 extended path (target_fan_speed), which persists when the
+      // fan is idle; C0 fan_mode reads 0x00 when stopped, so it is not adopted here.
       const ClimateMode mode_for_action =
           (this->mode == ClimateMode::CLIMATE_MODE_HEAT_COOL) ? ClimateMode::CLIMATE_MODE_HEAT_COOL : reported_mode;
 
@@ -758,7 +759,7 @@ void ClimateMideaXYE::do_follow_me(float temperature, bool beeper) {
   this->transmitter_.transmit(data);
 #else
   // Prepare Follow-Me command for temperature update
-  tx_data = TransmitData(Command::FOLLOW_ME);
+  tx_data = TransmitData(Command::FOLLOW_ME, this->server_id_, this->client_id_);
   auto &d = tx_data.message.data.standard;
 
   // timer_stop is a subcommand type field for Follow-Me commands.
@@ -788,7 +789,7 @@ void ClimateMideaXYE::set_static_pressure(uint8_t static_pressure) {
   }
 
   // Prepare Follow-Me command for static pressure setting
-  tx_data = TransmitData(Command::FOLLOW_ME);
+  tx_data = TransmitData(Command::FOLLOW_ME, this->server_id_, this->client_id_);
   auto &d = tx_data.message.data.standard;
   d.target_temperature.value = static_cast<uint8_t>(STATIC_PRESSURE_FLAG | (static_pressure & STATIC_PRESSURE_VALUE_MASK));
   d.timer_stop = FOLLOWME_SUBCOMMAND_STOP;

@@ -37,7 +37,8 @@ climate::ClimateFanMode XYEAdapter::get_climate_fan_mode(FanMode fan_mode) noexc
   switch (static_cast<uint8_t>(fan_mode) & FAN_SPEED_MASK) {
     case static_cast<uint8_t>(FanMode::FAN_HIGH):   return ClimateFanMode::CLIMATE_FAN_HIGH;
     case static_cast<uint8_t>(FanMode::FAN_MEDIUM): return ClimateFanMode::CLIMATE_FAN_MEDIUM;
-    case static_cast<uint8_t>(FanMode::FAN_LOW):    return ClimateFanMode::CLIMATE_FAN_LOW;
+    case static_cast<uint8_t>(FanMode::FAN_LOW):
+    case static_cast<uint8_t>(FanMode::FAN_LOW_ALT): return ClimateFanMode::CLIMATE_FAN_LOW;
     case static_cast<uint8_t>(FanMode::FAN_OFF):    return ClimateFanMode::CLIMATE_FAN_OFF;
     default:                                         return ClimateFanMode::CLIMATE_FAN_AUTO;
   }

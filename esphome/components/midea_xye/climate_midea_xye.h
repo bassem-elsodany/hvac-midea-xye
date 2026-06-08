@@ -196,6 +196,10 @@ class ClimateMideaXYE : public PollingComponent, public climate::Climate, public
   /// Opt-in: when true, this->fan_mode is updated from C4 target_fan_speed on every extended
   /// query cycle, reflecting the fan setting on the physical thermostat in Home Assistant.
   void set_sync_fan_mode_from_device(bool yesno) { this->sync_fan_mode_from_device_ = yesno; }
+  /// Destination/indoor-unit address used in outgoing frames (0x00..0x3F, or 0xFF broadcast).
+  void set_unit_id(NodeId id) { this->server_id_ = id; }
+  /// Source/master address advertised by this controller in outgoing frames (0x00..0x3F).
+  void set_master_id(NodeId id) { this->client_id_ = id; }
   void set_static_pressure_number(StaticPressureNumber *number) {
     this->static_pressure_number_ = number;
     number->set_parent(this);
@@ -264,6 +268,10 @@ class ClimateMideaXYE : public PollingComponent, public climate::Climate, public
   // Opt-in (sync_fan_mode_from_device YAML option): when true, fan_mode is updated from C4
   // target_fan_speed (the commanded speed from the physical thermostat).
   bool sync_fan_mode_from_device_{false};
+  // Outgoing frame addressing (unit_id / master_id YAML options). Defaults match the
+  // protocol's typical single-unit values (SERVER_ID / CLIENT_ID = 0x00).
+  NodeId server_id_{SERVER_ID};
+  NodeId client_id_{CLIENT_ID};
   Sensor *outdoor_sensor_{nullptr};
   Sensor *fan_speed_sensor_{nullptr};
   Sensor *temperature_2a_sensor_{nullptr};
