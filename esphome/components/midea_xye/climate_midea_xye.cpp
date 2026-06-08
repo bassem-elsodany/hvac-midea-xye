@@ -431,12 +431,16 @@ void ClimateMideaXYE::ParseResponse() {
                                        qr.compressor_running_flag == CompressorRunningFlag::ACTIVE;
         const bool defrost_active = this->compressor_aware_action_ &&
                                     XYEAdapter::is_defrost_active(qr.protect_flags.value());
+        // While HEAT_COOL is selected, derive action from the thermostat sub-mode (HEAT/COOL
+        // the ESP would send), not C0 operation_mode (wall sub-mode on a dual-master bus).
+        this->sync_auto_bus_mode_();
+        const OperationMode op_for_action = (this->mode == ClimateMode::CLIMATE_MODE_HEAT_COOL)
+                                              ? this->get_bus_operation_mode_()
+                                              : qr.operation_mode;
         update_property(this->action,
-                        XYEAdapter::get_climate_action(mode_for_action, qr.fan_mode, qr.operation_mode,
+                        XYEAdapter::get_climate_action(mode_for_action, qr.fan_mode, op_for_action,
                                                        compressor_active, defrost_active),
                         need_publish);
-
-        this->sync_auto_bus_mode_();
 
         if ((this->swing_mode != ClimateSwingMode::CLIMATE_SWING_OFF) !=
             (bool) (static_cast<uint8_t>(qr.mode_flags) & MODE_FLAG_SWING))
