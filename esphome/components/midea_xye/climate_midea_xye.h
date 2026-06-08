@@ -249,6 +249,9 @@ class ClimateMideaXYE : public PollingComponent, public climate::Climate, public
   uint32_t CalculateGetTime(uint8_t time);
   void update_current_temperature_from_sensors_(bool &need_publish);
   void on_follow_me_sensor_update_(float state);
+  void request_set_();
+  void request_follow_me_();
+  void advance_control_state_(uint8_t cmd_sent);
 };
 
 }  // namespace xye

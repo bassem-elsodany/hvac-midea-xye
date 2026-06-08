@@ -53,12 +53,7 @@ void ClimateMideaXYE::control(const ClimateCall &call) {
   if (call.get_preset().has_value())
     this->preset = call.get_preset().value();
   this->publish_state();
-
-  if (controlState != ControlState::WAIT_DATA) {
-    controlState = ControlState::SEND_SET;
-  } else {
-    queuedCommand = ControlState::SEND_SET;
-  }
+  this->request_set_();
 }
 
 void ClimateMideaXYE::setup() {
@@ -92,10 +87,51 @@ void ClimateMideaXYE::setPowerState(bool state) {
   else
     this->mode = ClimateMode::CLIMATE_MODE_OFF;
 
-  if (controlState != ControlState::WAIT_DATA) {
-    controlState = ControlState::SEND_SET;
-  } else {
+  this->request_set_();
+}
+
+void ClimateMideaXYE::request_set_() {
+  if (controlState == ControlState::WAIT_DATA) {
     queuedCommand = ControlState::SEND_SET;
+  } else {
+    controlState = ControlState::SEND_SET;
+  }
+}
+
+void ClimateMideaXYE::request_follow_me_() {
+  if (controlState == ControlState::WAIT_DATA) {
+    if (queuedCommand != ControlState::SEND_SET) {
+      queuedCommand = ControlState::SEND_FOLLOWME;
+    }
+  } else if (controlState != ControlState::SEND_SET) {
+    controlState = ControlState::SEND_FOLLOWME;
+  }
+}
+
+void ClimateMideaXYE::advance_control_state_(uint8_t cmd_sent) {
+  if (queuedCommand != ControlState::WAIT_DATA) {
+    controlState = queuedCommand;
+    queuedCommand = ControlState::WAIT_DATA;
+    return;
+  }
+
+  switch (cmd_sent) {
+    case CLIENT_COMMAND_QUERY:
+      controlState = ControlState::SEND_QUERY_EXTENDED;
+      break;
+    case CLIENT_COMMAND_SET:
+      controlState = ControlState::SEND_FOLLOWME;
+      break;
+    case CLIENT_COMMAND_QUERY_EXTENDED:
+      controlState = ControlState::SEND_QUERY;
+      break;
+    case CLIENT_COMMAND_FOLLOWME:
+      controlState = ControlState::SEND_QUERY;
+      break;
+    default:
+      ESP_LOGW(Constants::TAG, "Unknown command %02X in state advance, resuming QUERY", cmd_sent);
+      controlState = ControlState::SEND_QUERY;
+      break;
   }
 }
 
@@ -149,28 +185,13 @@ void ClimateMideaXYE::sendRecv(uint8_t cmdSent) {
       if (cmdSent != CLIENT_COMMAND_SET && cmdSent != CLIENT_COMMAND_FOLLOWME) {
         ParseResponse();
       }
-      if (queuedCommand != ControlState::WAIT_DATA) {
-        controlState = queuedCommand;
-        queuedCommand = ControlState::WAIT_DATA;
-      } else {
-        switch (cmdSent) {
-          case CLIENT_COMMAND_QUERY:
-            controlState = ControlState::SEND_QUERY_EXTENDED;
-            break;
-          case CLIENT_COMMAND_SET:
-            controlState = ControlState::SEND_FOLLOWME;
-            break;
-          case CLIENT_COMMAND_QUERY_EXTENDED:
-            controlState = ControlState::SEND_QUERY;
-            break;
-          case CLIENT_COMMAND_FOLLOWME:
-            controlState = ControlState::SEND_QUERY;
-            break;
-        }
-      }
+      this->advance_control_state_(cmdSent);
     } else {
-      ESP_LOGE(Constants::TAG, "Received incorrect message length from AC for Command %02X", cmdSent);
-      rx_data.print_debug(i, Constants::TAG, ESPHOME_LOG_LEVEL_ERROR);
+      ESP_LOGW(Constants::TAG, "Received incorrect message length %u from AC for Command %02X, resuming bus",
+               i, cmdSent);
+      if (i > 0)
+        rx_data.print_debug(i, Constants::TAG, ESPHOME_LOG_LEVEL_WARN);
+      this->advance_control_state_(cmdSent);
     }
   });
 }
@@ -492,11 +513,7 @@ void ClimateMideaXYE::do_follow_me(float temperature, bool beeper) {
   // Only send if mode is something other than off.
   // Wired controller does not send Follow-Me command when off.
   if (this->mode != ClimateMode::CLIMATE_MODE_OFF) {
-    if (controlState != ControlState::WAIT_DATA) {
-      controlState = ControlState::SEND_FOLLOWME;
-    } else {
-      queuedCommand = ControlState::SEND_FOLLOWME;
-    }
+    this->request_follow_me_();
     ESP_LOGI(Constants::TAG, "Queued Follow-Me data.");
   }
 #endif
@@ -517,11 +534,7 @@ void ClimateMideaXYE::set_static_pressure(uint8_t static_pressure) {
   tx_data.update_crc();
 
   if (this->mode == ClimateMode::CLIMATE_MODE_OFF) {
-    if (controlState != ControlState::WAIT_DATA) {
-      controlState = ControlState::SEND_FOLLOWME;
-    } else {
-      queuedCommand = ControlState::SEND_FOLLOWME;
-    }
+    this->request_follow_me_();
     ESP_LOGI(Constants::TAG, "Queued setting static pressure to %d", static_pressure);
   } else {
     ESP_LOGW(Constants::TAG, "Cannot set static pressure while unit is running");
