@@ -15,6 +15,11 @@ Key points (see PROTOCOL.md for full detail):
 
 This fork implements that thermostat role in firmware when `HEAT_COOL` is enabled and selected in Home Assistant (`resolve_auto_operation_mode()` in `xye_adapter.cpp`).
 
+## Further reading
+
+- **[PROTOCOL.md](esphome/components/midea_xye/PROTOCOL.md)** — source of truth for wire format, byte tables, bus topology, and hardware notes.
+- **[RESEARCH_SUMMARY.md](esphome/components/midea_xye/RESEARCH_SUMMARY.md)** — research notes and model-to-model variations. Use this when commissioning: e.g. **C0 Current Raw** stuck at `255` (`0xFF` = not available on many IDUs), FAN_LOW `0x03` vs `0x04`, or a trace byte that differs from another Midea unit.
+
 ## Overview
 
 The component communicates with Midea-like air conditioners (heat pumps) via the XYE protocol over RS-485 at **4800 8N1**.
