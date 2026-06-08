@@ -46,7 +46,7 @@ void ClimateMideaXYE::control(const ClimateCall &call) {
     // proper initialization sequence is sent on next Follow-Me update
     followMeInit = false;
     if (this->mode == ClimateMode::CLIMATE_MODE_HEAT_COOL) {
-      const float current = this->current_temperature.value_or(this->internal_temperature_);
+      const float current = this->get_effective_current_temperature_();
       if (!std::isnan(current)) {
         this->auto_bus_mode_ =
             XYEAdapter::resolve_auto_operation_mode(current, this->target_temperature, this->auto_bus_mode_);
@@ -56,7 +56,7 @@ void ClimateMideaXYE::control(const ClimateCall &call) {
   if (call.get_target_temperature().has_value()) {
     this->target_temperature = call.get_target_temperature().value();
     if (this->mode == ClimateMode::CLIMATE_MODE_HEAT_COOL) {
-      const float current = this->current_temperature.value_or(this->internal_temperature_);
+      const float current = this->get_effective_current_temperature_();
       if (!std::isnan(current)) {
         this->auto_bus_mode_ =
             XYEAdapter::resolve_auto_operation_mode(current, this->target_temperature, this->auto_bus_mode_);
@@ -152,10 +152,16 @@ void ClimateMideaXYE::advance_control_state_(uint8_t cmd_sent) {
   }
 }
 
+float ClimateMideaXYE::get_effective_current_temperature_() const {
+  if (!std::isnan(this->current_temperature))
+    return this->current_temperature;
+  return this->internal_temperature_;
+}
+
 OperationMode ClimateMideaXYE::get_bus_operation_mode_() const {
   if (this->mode != ClimateMode::CLIMATE_MODE_HEAT_COOL)
     return XYEAdapter::get_operation_mode(this->mode);
-  float current = this->current_temperature.value_or(this->internal_temperature_);
+  float current = this->get_effective_current_temperature_();
   if (std::isnan(current))
     current = this->target_temperature;
   return XYEAdapter::resolve_auto_operation_mode(current, this->target_temperature, this->auto_bus_mode_);

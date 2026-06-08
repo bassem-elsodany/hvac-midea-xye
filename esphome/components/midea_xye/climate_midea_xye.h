@@ -303,6 +303,7 @@ class ClimateMideaXYE : public PollingComponent, public climate::Climate, public
   OperationMode auto_bus_mode_{OperationMode::COOL};
 
   void ParseResponse();
+  float get_effective_current_temperature_() const;
   OperationMode get_bus_operation_mode_() const;
   void sync_auto_bus_mode_();
   uint8_t CalculateSetTime(uint32_t time);
