@@ -1,31 +1,70 @@
-# One file per ESP. Copy to HA /config/esphome/, edit substitutions block + api secret line.
+# ══════════════════════════════════════════════════════════════════════════════
+# ESPHome config — Midea XYE ducted heat pump via RS-485
+# One file per ESP. Copy to HA /config/esphome/, edit the substitutions block
+# at the top and the api.encryption.key secret line, then flash.
+# ══════════════════════════════════════════════════════════════════════════════
 
 substitutions:
   # ════════════════════════════════════════
-  # PER-ROOM — change these when copying
+  # PER-ROOM — change these when copying to a new ESP
   # ════════════════════════════════════════
-  name: "hvac-living-controller"          # ESP hostname (must be unique per device)
-  friendly_name: "Living HVAC Controller" # HA device/entity display name
+
+  # ESP mDNS hostname — must be unique per device (no spaces, lowercase-kebab)
+  name: "hvac-living-controller"
+
+  # Label shown in HA UI for all entities from this device
+  friendly_name: "Living HVAC Controller"
+
+  # Free-text comment visible in ESPHome dashboard
   comment: "ESPHome ESP32 RS-485 — living room ducted heat pump"
-  room_id: "living"                       # Short slug: used in sensor IDs + fallback AP SSID
-  ip_address: "10.0.20.160"              # Static IP (must be unique per device)
-  follow_me_entity: "sensor.zigbee_temp_living_temperature"  # Zigbee room temp sensor in HA
+
+  # Short slug used in sensor entity IDs and the fallback AP SSID
+  room_id: "living"
+
+  # Static IP assigned to this ESP — must be unique per device
+  ip_address: "10.0.20.160"
+
+  # HA entity_id of a Zigbee / BLE temperature sensor in the same room.
+  # Used for Follow-Me: the AC uses this reading instead of its internal sensor.
+  follow_me_entity: "sensor.zigbee_temp_living_temperature"
+
+  # Climate entity name shown in HA (keep consistent with `name`)
   climate_name: "hvac-living-controller"
+
+  # Climate entity id used internally by ESPHome (underscores, no hyphens)
   climate_name_id: "hvac_living_controller"
-  temp_min: "20"                          # HA UI lower limit °C (visual only, not bus encoded)
-  temp_max: "26"                          # HA UI upper limit °C
+
+  # Target temperature slider limits in the HA climate card (visual only —
+  # the AC itself enforces its own hardware min/max)
+  temp_min: "20"   # °C
+  temp_max: "26"   # °C
 
   # ════════════════════════════════════════
-  # SHARED — same on every ESP (rarely change)
+  # SHARED — same on every ESP (rarely need changing)
   # ════════════════════════════════════════
+
+  # Router gateway and subnet for the static IP above
   wifi_gateway: "10.0.20.1"
   wifi_subnet: "255.255.255.0"
-  uart_tx: "GPIO17"                       # RS-485 DI → ESP TX
-  uart_rx: "GPIO16"                       # RS-485 RO → ESP RX
-  unit_id: "0x00"                         # XYE indoor unit ID (0x00 = single unit default)
-  master_id: "0x00"                       # XYE master/controller ID advertised by this ESP
-  midea_xye_log: "DEBUG"                  # "DEBUG" commissioning | "INFO" production
 
+  # RS-485 module wiring on the ESP32:
+  #   uart_tx → RS-485 DI (Data In)   pin
+  #   uart_rx → RS-485 RO (Receiver Output) pin
+  uart_tx: "GPIO17"
+  uart_rx: "GPIO16"
+
+  # XYE bus addressing (single-unit installations: both 0x00)
+  # unit_id   = destination address of the indoor unit (0x00..0x3F or 0xFF broadcast)
+  # master_id = source address this ESP advertises as the CCM/controller (0x00..0x3F)
+  unit_id: "0x00"
+  master_id: "0x00"
+
+  # Component log level — use DEBUG during commissioning, INFO in production
+  midea_xye_log: "DEBUG"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ESPHome core
+# ──────────────────────────────────────────────────────────────────────────────
 esphome:
   name: ${name}
   name_add_mac_suffix: false
@@ -37,19 +76,34 @@ esp32:
   framework:
     type: arduino
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Logging — serial output disabled (baud_rate 0) because GPIO16/17 are used
+# for RS-485; all logs go over the ESPHome API (web dashboard / aioesphomeapi)
+# ──────────────────────────────────────────────────────────────────────────────
 logger:
   baud_rate: 0
   logs:
     midea_xye: ${midea_xye_log}
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Home Assistant API — encrypted; generate a unique key per room in secrets.yaml
+# e.g.  hvac_living__encryption_key: "<openssl rand -base64 32 output>"
+# ──────────────────────────────────────────────────────────────────────────────
 api:
   encryption:
-    key: !secret hvac_living__encryption_key   # change secret name per room in secrets.yaml
+    key: !secret hvac_living__encryption_key   # ← change secret name per room
 
+# ──────────────────────────────────────────────────────────────────────────────
+# OTA (over-the-air) firmware updates
+# ──────────────────────────────────────────────────────────────────────────────
 ota:
   - platform: esphome
     password: !secret ota_password
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Wi-Fi — static IP so HA can reliably reach the ESP after restarts
+# Fallback AP activates when Wi-Fi is unreachable (captive portal below)
+# ──────────────────────────────────────────────────────────────────────────────
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
@@ -59,17 +113,25 @@ wifi:
     gateway: ${wifi_gateway}
     subnet: ${wifi_subnet}
   ap:
-    ssid: "hvac-${room_id}-setup"
+    ssid: "hvac-${room_id}-setup"            # fallback AP SSID
     password: !secret access_point_password
 
-captive_portal:
+captive_portal:  # serves a web form to enter Wi-Fi credentials in AP mode
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Local web server — browse to http://<ip_address> for a quick status page
+# ──────────────────────────────────────────────────────────────────────────────
 web_server:
   port: 80
   auth:
     username: !secret web_server_username
     password: !secret web_server_password
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Custom midea_xye component from this fork.
+# refresh: always ensures the git repo is re-fetched on every build so that
+# fixes pushed to main are picked up without changing the ref.
+# ──────────────────────────────────────────────────────────────────────────────
 external_components:
   - source:
       type: git
@@ -78,26 +140,42 @@ external_components:
     refresh: always
     components: [midea_xye]
 
+# ──────────────────────────────────────────────────────────────────────────────
+# UART — RS-485 bus (Midea XYE protocol: 4800 8N1 half-duplex)
+# Auto-direction RS-485 module (e.g. MAX3485 with auto-switch): no flow_control_pin needed.
+# The debug block dumps raw frames to the log — comment out for production.
+# ──────────────────────────────────────────────────────────────────────────────
 uart:
   tx_pin: ${uart_tx}
   rx_pin: ${uart_rx}
   baud_rate: 4800
-  # Uncomment for commissioning / bus debugging, comment out for production:
+  # Raw bus frame hex dump — useful during commissioning; comment out for production:
   debug:
     direction: BOTH
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Sensors
+# ──────────────────────────────────────────────────────────────────────────────
 sensor:
+  # Follow-Me: import a Zigbee/BLE room temperature sensor from HA.
+  # The AC uses this reading (via C6 FOLLOW_ME frames) instead of its internal T1.
   - platform: homeassistant
     id: ${room_id}_follow_me
     entity_id: ${follow_me_entity}
     name: "${friendly_name} Follow-Me"
+
+  # Wi-Fi signal strength — useful for diagnosing connectivity issues
   - platform: wifi_signal
     name: "${friendly_name} Wi-Fi Signal"
     update_interval: 60s
+
+  # Uptime in seconds (internal — used to compute Uptime Days below)
   - platform: uptime
     name: "Uptime"
     id: uptime_sec
     internal: true
+
+  # Human-readable uptime in days, updated every minute
   - platform: template
     name: "${friendly_name} Uptime Days"
     lambda: |-
@@ -106,85 +184,171 @@ sensor:
     unit_of_measurement: days
     update_interval: 60s
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Climate entity — Midea XYE heat pump
+# ──────────────────────────────────────────────────────────────────────────────
 climate:
   - platform: midea_xye
     name: ${climate_name}
     id: ${climate_name_id}
+
+    # XYE bus addressing (see substitutions above)
     unit_id: ${unit_id}
     master_id: ${master_id}
+
+    # How often the ESP polls the AC with a C0 QUERY frame
     period: 1s
+
+    # How long to wait for the AC to reply before giving up
     timeout: 100ms
+
+    # Temperature unit sent on the XYE bus — keep false (Celsius) for most units
     use_fahrenheit: false
+
+    # Emit a beep on the AC when a command is received from HA
     beeper: true
+
+    # When true: HA climate action (heating/cooling/idle) is derived from the C0 byte-19
+    # compressor-running flag + defrost bit — more accurate than "fan running implies active".
     compressor_aware_action: true
-    # C4 path — unit returns 0xC5 (not supported), keep false
+
+    # C4 extended query fan sync — this unit returns 0xC5 (C4 not supported), so keep false.
+    # Set true only if your unit responds to C4 QUERY_EXTENDED (0xC4) with valid data.
     sync_fan_mode_from_device: false
-    # C0 path — sync HA fan_mode from physical running speed; fixes AUTO-vs-MEDIUM divergence
+
+    # C0 fan mode sync — reads physical running speed from C0 byte 9 every poll cycle.
+    # Fixes the "HA shows AUTO, runtime shows MEDIUM" divergence on units without C4 support.
+    # Logic: 0x00 (fan idle) → no update; bit-7 set → AUTO; else → LOW/MEDIUM/HIGH.
     sync_fan_mode_from_c0: true
+
+    # Temperature slider limits in the HA UI (cosmetic — does not limit what the AC accepts)
     visual:
       min_temperature: ${temp_min} °C
       max_temperature: ${temp_max} °C
       temperature_step: 1.0 °C
+
+    # AC operating modes exposed in HA
+    # HEAT_COOL = thermostat AUTO: ESP decides HEAT or COOL based on room vs setpoint
     supported_modes:
       - FAN_ONLY
       - HEAT_COOL
       - COOL
       - HEAT
       - DRY
+
+    # Follow-Me: reference to the imported HA temperature sensor defined above
     follow_me_sensor: ${room_id}_follow_me
+
+    # ── C0 QUERY response trace sensors ────────────────────────────────────────
+    # These expose raw bus fields as HA sensors for diagnostics.
+    # All C0 byte offsets are from PROTOCOL.md "Receive Messages" table.
+
+    # Byte 11 — T1: internal/room air temperature (same as climate current_temperature
+    # when no Follow-Me sensor is available)
     internal_current_temperature:
       name: "C0 T1 Room Temp"
+
+    # Byte 10 — target setpoint as reported by the AC (raw Celsius, bit-6 masked)
     bus_target_temperature:
       name: "C0 Bus Setpoint"
+
+    # Byte 8 — current operation mode byte (raw hex value)
     bus_operation_mode:
       name: "C0 Operation Mode Raw"
+
+    # Byte 8 — current operation mode decoded as text (e.g. "136 (COOL)")
     bus_operation_mode_text:
       name: "C0 Operation Mode"
+
+    # Byte 9 — fan mode byte (raw hex; bit-7 = AUTO flag, lower nibble = physical speed)
     bus_fan_mode:
       name: "C0 Fan Mode Raw"
+
+    # Byte 9 — fan mode decoded as text (e.g. "130 (AUTO+MED)")
     bus_fan_mode_text:
       name: "C0 Fan Mode"
+
+    # Byte 7 — unit capability flags (raw)
     capabilities:
       name: "C0 Capabilities Raw"
+
+    # Byte 7 — capabilities decoded as text (e.g. "EXTERNAL_TEMP | SWING")
     capabilities_text:
       name: "C0 Capabilities"
+
+    # Byte 20 — special mode flags (ECO, AUX_HEAT, SWING, VENTILATION)
     mode_flags:
       name: "C0 Mode Flags"
+
+    # Byte 21 — operation status flags (WATER_PUMP, WATER_LOCK)
     operation_flags:
       name: "C0 Operation Flags"
+
+    # Byte 12 — T2A: indoor coil inlet temperature (refrigerant entering evaporator)
     temperature_2a:
       name: "C0 T2A Coil Inlet"
+
+    # Byte 13 — T2B: indoor coil outlet temperature (refrigerant leaving evaporator)
     temperature_2b:
       name: "C0 T2B Coil Outlet"
+
+    # Byte 14 — T3: outdoor coil / ambient temperature
     temperature_3:
       name: "C0 T3 Outdoor Coil"
+
+    # Bytes 17-18 — timer start/stop settings (raw flag bitmask)
     timer_start:
       name: "C0 Timer Start"
     timer_stop:
       name: "C0 Timer Stop"
+
+    # Bytes 22-23 — E1/E2 error code flags (16-bit; non-zero means a fault code)
     error_flags:
       name: "C0 Error Flags"
+
+    # Bytes 24-25 — protection flags (bit 0x0002 = defrost cycle active)
     protect_flags:
       name: "C0 Protect Flags"
+
+    # Byte 26 — CCM communication error flags (timeout, CRC error, protocol error)
     ccm_error_flags:
       name: "C0 CCM Error Flags"
+
+    # Byte 9 lower nibble — physical fan speed ordinal (0=off, 1=high, 2=med, 4=low)
     fan_speed:
       name: "C0 Fan Speed Level"
+
+    # Byte 6 — unknown field (possibly capabilities-related; 0x30 observed)
     unknown1:
       name: "C0 Unknown1"
+
+    # Byte 16 — unknown field
     unknown2:
       name: "C0 Unknown2"
+
+    # Byte 27 — hardware-dependent steady value (0x00 or 0x14 observed across units)
     unknown4:
       name: "C0 Unknown4"
+
+    # Byte 28 — drifts slowly; leading hypothesis: IDU EEV step count low byte
     unknown5:
       name: "C0 Unknown5"
+
+    # Byte 29 — steady per unit; leading hypothesis: IDU EEV step count high byte
     unknown6:
       name: "C0 Unknown6"
+
+    # Byte 19 bit + protect_flags bit 0x0002 — defrost cycle binary sensor
     defrost:
       name: "C0 Defrost Active"
+
+    # Byte 19 — provisional compressor-running flag (0x01 running, 0x00 idle)
     compressor_active:
       name: "C0 Compressor Run Flag"
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Internal switch — tracks RS-485 bus state (used internally by component)
+# ──────────────────────────────────────────────────────────────────────────────
 switch:
   - platform: template
     name: "RS485 Active"
