@@ -196,6 +196,11 @@ class ClimateMideaXYE : public PollingComponent, public climate::Climate, public
   /// Opt-in: when true, this->fan_mode is updated from C4 target_fan_speed on every extended
   /// query cycle, reflecting the fan setting on the physical thermostat in Home Assistant.
   void set_sync_fan_mode_from_device(bool yesno) { this->sync_fan_mode_from_device_ = yesno; }
+  /// Opt-in: when true, this->fan_mode is updated from the C0 fan_mode byte on every query
+  /// cycle. Respects the AUTO flag (0x80): AUTO flag set → CLIMATE_FAN_AUTO; no flag and fan
+  /// running → maps to LOW/MEDIUM/HIGH; fan stopped (0x00) → no update (keeps last commanded).
+  /// Useful when C4 extended query is unsupported (unit returns 0xC5).
+  void set_sync_fan_mode_from_c0(bool yesno) { this->sync_fan_mode_from_c0_ = yesno; }
   /// Destination/indoor-unit address used in outgoing frames (0x00..0x3F, or 0xFF broadcast).
   void set_unit_id(NodeId id) { this->server_id_ = id; }
   /// Source/master address advertised by this controller in outgoing frames (0x00..0x3F).
@@ -268,6 +273,9 @@ class ClimateMideaXYE : public PollingComponent, public climate::Climate, public
   // Opt-in (sync_fan_mode_from_device YAML option): when true, fan_mode is updated from C4
   // target_fan_speed (the commanded speed from the physical thermostat).
   bool sync_fan_mode_from_device_{false};
+  // Opt-in (sync_fan_mode_from_c0 YAML option): when true, fan_mode is updated from the C0
+  // fan_mode byte so HA shows the physical running speed instead of the last commanded mode.
+  bool sync_fan_mode_from_c0_{false};
   // Outgoing frame addressing (unit_id / master_id YAML options). Defaults match the
   // protocol's typical single-unit values (SERVER_ID / CLIENT_ID = 0x00).
   NodeId server_id_{SERVER_ID};

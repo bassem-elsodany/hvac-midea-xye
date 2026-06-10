@@ -69,6 +69,7 @@ CONF_COMPRESSOR_ACTIVE = "compressor_active"
 CONF_FAN_SPEED = "fan_speed"
 CONF_COMPRESSOR_AWARE_ACTION = "compressor_aware_action"
 CONF_SYNC_FAN_MODE_FROM_DEVICE = "sync_fan_mode_from_device"
+CONF_SYNC_FAN_MODE_FROM_C0 = "sync_fan_mode_from_c0"
 CONF_UNIT_ID = "unit_id"
 CONF_MASTER_ID = "master_id"
 # C0 QUERY response trace fields (PROTOCOL.md bytes 6-29)
@@ -196,6 +197,11 @@ CONFIG_SCHEMA = cv.All(
             # physical thermostat), so Home Assistant reflects fan mode changes even when
             # not triggered by an HA command.
             cv.Optional(CONF_SYNC_FAN_MODE_FROM_DEVICE, default=False): cv.boolean,
+            # Opt-in: sync this->fan_mode from the C0 fan_mode byte (physical running speed).
+            # Useful when the unit does not support C4 extended query (returns 0xC5).
+            # Logic: 0x00 → no update (fan idle); bit-7 set → AUTO; else → LOW/MEDIUM/HIGH.
+            # Mutually exclusive with sync_fan_mode_from_device (C4 path takes precedence).
+            cv.Optional(CONF_SYNC_FAN_MODE_FROM_C0, default=False): cv.boolean,
             # Destination/indoor-unit address used in outgoing frames. Default 0x00 matches the
             # protocol's typical single-unit value; use 0x00..0x3F to target a specific unit or
             # 0xFF to broadcast.
@@ -515,6 +521,7 @@ async def to_code(config):
     cg.add(var.set_use_fahrenheit(config[CONF_USE_FAHRENHEIT]))
     cg.add(var.set_compressor_aware_action(config[CONF_COMPRESSOR_AWARE_ACTION]))
     cg.add(var.set_sync_fan_mode_from_device(config[CONF_SYNC_FAN_MODE_FROM_DEVICE]))
+    cg.add(var.set_sync_fan_mode_from_c0(config[CONF_SYNC_FAN_MODE_FROM_C0]))
     cg.add(var.set_unit_id(config[CONF_UNIT_ID]))
     cg.add(var.set_master_id(config[CONF_MASTER_ID]))
     if CONF_TRANSMITTER_ID in config:

@@ -537,6 +537,25 @@ void ClimateMideaXYE::ParseResponse() {
         need_publish = true;
       }
 
+      // C0 fan mode sync: optional path for units that do not support C4 extended query.
+      // Reads the physical running speed from C0 byte 9 and keeps HA fan_mode accurate:
+      //   0x00 (fan stopped)  → skip; keep last commanded mode (avoids OFF-glitch on idle)
+      //   bit 7 (0x80) set    → unit is auto-controlling speed → CLIMATE_FAN_AUTO
+      //   bit 7 clear, >0     → unit reports explicit speed   → LOW / MEDIUM / HIGH
+      // Skipped during post_set_grace_ to avoid overwriting a freshly-sent SET command.
+      if (this->sync_fan_mode_from_c0_ && post_set_grace_ == 0) {
+        const uint8_t fan_raw = static_cast<uint8_t>(qr.fan_mode);
+        if (fan_raw != 0x00) {
+          const ClimateFanMode c0_fan = XYEAdapter::get_climate_fan_mode(qr.fan_mode);
+          if (!this->fan_mode.has_value() || this->fan_mode.value() != c0_fan) {
+            ESP_LOGD(Constants::TAG, "C0 fan sync: 0x%02X -> %s", fan_raw,
+                     LOG_STR_ARG(climate::climate_fan_mode_to_string(c0_fan)));
+            this->fan_mode = c0_fan;
+            need_publish = true;
+          }
+        }
+      }
+
       if (need_publish)
         this->publish_state();
 
