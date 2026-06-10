@@ -151,10 +151,12 @@ void ClimateMideaXYE::control(const ClimateCall &call) {
     const ClimateMode new_mode = call.get_mode().value();
     ESP_LOGI(Constants::TAG, "HA mode -> %s", LOG_STR_ARG(climate::climate_mode_to_string(new_mode)));
     this->mode = new_mode;
+    // Track HEAT_COOL intent separately so this->mode can always follow the bus.
+    heat_cool_active_ = (new_mode == ClimateMode::CLIMATE_MODE_HEAT_COOL);
     // Reset Follow-Me initialization flag when mode changes to ensure
     // proper initialization sequence is sent on next Follow-Me update
     followMeInit = false;
-    if (this->mode == ClimateMode::CLIMATE_MODE_HEAT_COOL) {
+    if (heat_cool_active_) {
       const float current = this->get_effective_current_temperature_();
       if (!std::isnan(current)) {
         const OperationMode prev = this->auto_bus_mode_;
@@ -169,7 +171,7 @@ void ClimateMideaXYE::control(const ClimateCall &call) {
     const float new_target = call.get_target_temperature().value();
     ESP_LOGI(Constants::TAG, "HA target -> %.1f°C", new_target);
     this->target_temperature = new_target;
-    if (this->mode == ClimateMode::CLIMATE_MODE_HEAT_COOL) {
+    if (heat_cool_active_) {
       const float current = this->get_effective_current_temperature_();
       if (!std::isnan(current)) {
         const OperationMode prev = this->auto_bus_mode_;
@@ -290,7 +292,7 @@ float ClimateMideaXYE::get_effective_current_temperature_() const {
 }
 
 OperationMode ClimateMideaXYE::get_bus_operation_mode_() const {
-  if (this->mode != ClimateMode::CLIMATE_MODE_HEAT_COOL)
+  if (!heat_cool_active_)
     return XYEAdapter::get_operation_mode(this->mode);
   float current = this->get_effective_current_temperature_();
   if (std::isnan(current))
@@ -299,7 +301,7 @@ OperationMode ClimateMideaXYE::get_bus_operation_mode_() const {
 }
 
 void ClimateMideaXYE::sync_auto_bus_mode_() {
-  if (this->mode != ClimateMode::CLIMATE_MODE_HEAT_COOL || post_set_grace_ > 0)
+  if (!heat_cool_active_ || post_set_grace_ > 0)
     return;
   const OperationMode desired = this->get_bus_operation_mode_();
   if (desired == this->auto_bus_mode_)
@@ -318,10 +320,10 @@ void ClimateMideaXYE::setTransmitParams() {
   this->auto_bus_mode_ = this->get_bus_operation_mode_();
   d.operation_mode = this->auto_bus_mode_;
 
-  if (this->mode != ClimateMode::CLIMATE_MODE_HEAT_COOL) {
+  if (!heat_cool_active_) {
     d.fan_mode = XYEAdapter::get_fan_mode(this->fan_mode.value());
   } else {
-    // Auto is full-auto - can't set fan mode either.
+    // AUTO mode: let the unit decide fan speed.
     this->fan_mode = ClimateFanMode::CLIMATE_FAN_AUTO;
     d.fan_mode = FanMode::FAN_AUTO;
   }
@@ -443,10 +445,10 @@ void ClimateMideaXYE::ParseResponse() {
       ClimatePreset preset = ClimatePreset::CLIMATE_PRESET_NONE;
 
       const ClimateMode reported_mode = XYEAdapter::get_climate_mode(qr.operation_mode);
-      // Fan mode is owned by the C4 extended path (target_fan_speed), which persists when the
-      // fan is idle; C0 fan_mode reads 0x00 when stopped, so it is not adopted here.
+      // For action computation: when HEAT_COOL auto is active the thermostat decides
+      // HEAT vs COOL, so pass HEAT_COOL to get_climate_action; otherwise use C0.
       const ClimateMode mode_for_action =
-          (this->mode == ClimateMode::CLIMATE_MODE_HEAT_COOL) ? ClimateMode::CLIMATE_MODE_HEAT_COOL : reported_mode;
+          heat_cool_active_ ? ClimateMode::CLIMATE_MODE_HEAT_COOL : reported_mode;
 
       if (static_cast<uint8_t>(qr.mode_flags) & MODE_FLAG_AUX_HEAT)
         preset = ClimatePreset::CLIMATE_PRESET_BOOST;
@@ -460,15 +462,18 @@ void ClimateMideaXYE::ParseResponse() {
         ESP_LOGD(Constants::TAG,
                  "Post-SET grace: ignoring reported mode=%d (%u cycle(s) remaining)",
                  static_cast<int>(reported_mode), post_set_grace_);
-      } else if (this->mode != ClimateMode::CLIMATE_MODE_HEAT_COOL) {
+      } else {
+        // C0 is the source of truth for mode — always sync this->mode from the bus.
+        // heat_cool_active_ is kept separately so AUTO thermostat switching still works
+        // even though this->mode may now show COOL/HEAT/FAN instead of HEAT_COOL.
+        // Clear heat_cool_active_ only when the unit reports OFF (user turned it off).
+        if (reported_mode == ClimateMode::CLIMATE_MODE_OFF)
+          heat_cool_active_ = false;
         update_property(this->mode, reported_mode, need_publish);
         if (reported_mode != ClimateMode::CLIMATE_MODE_OFF) {
           this->last_on_mode_ = reported_mode;
         }
       }
-
-      // PROTOCOL.md: the indoor unit never reports AUTO; while HEAT_COOL is selected the
-      // thermostat (this component) owns the HEAT/COOL sub-mode — do not adopt bus mode.
 
       if (reported_mode != ClimateMode::CLIMATE_MODE_OFF || this->mode != ClimateMode::CLIMATE_MODE_OFF ||
           ForceReadNextCycle == 1) {
@@ -488,17 +493,16 @@ void ClimateMideaXYE::ParseResponse() {
         {
           const float incoming_target_temp =
               XYEAdapter::get_target_temperature(qr.target_temperature.value, false);
-          if (post_set_grace_ == 0 && !this->use_fahrenheit_ &&
-              this->mode != ClimateMode::CLIMATE_MODE_HEAT_COOL) {
+          if (post_set_grace_ == 0 && !this->use_fahrenheit_ && !heat_cool_active_) {
             if (incoming_target_temp != this->target_temperature) {
               ESP_LOGD(Constants::TAG, "C0 setpoint sync: 0x%02X %.1f°C -> HA (was %.1f°C)",
                        qr.target_temperature.value, incoming_target_temp, this->target_temperature);
             }
             update_property(this->target_temperature, incoming_target_temp, need_publish);
           } else if (!this->use_fahrenheit_ && incoming_target_temp != this->target_temperature) {
-            const char *reason = post_set_grace_ > 0           ? "post-SET grace"
-                                 : this->mode == ClimateMode::CLIMATE_MODE_HEAT_COOL ? "HEAT_COOL owns setpoint"
-                                                                                     : "fahrenheit/C4 path";
+            const char *reason = post_set_grace_ > 0 ? "post-SET grace"
+                                 : heat_cool_active_          ? "HEAT_COOL owns setpoint"
+                                                              : "fahrenheit/C4 path";
             ESP_LOGD(Constants::TAG, "C0 setpoint sync skipped (%s): bus 0x%02X %.1f°C HA %.1f°C", reason,
                      qr.target_temperature.value, incoming_target_temp, this->target_temperature);
           }
@@ -514,7 +518,7 @@ void ClimateMideaXYE::ParseResponse() {
         // While HEAT_COOL is selected, derive action from the thermostat sub-mode (HEAT/COOL
         // the ESP would send), not C0 operation_mode (wall sub-mode on a dual-master bus).
         this->sync_auto_bus_mode_();
-        const OperationMode op_for_action = (this->mode == ClimateMode::CLIMATE_MODE_HEAT_COOL)
+        const OperationMode op_for_action = heat_cool_active_
                                               ? this->get_bus_operation_mode_()
                                               : qr.operation_mode;
         update_property(this->action,

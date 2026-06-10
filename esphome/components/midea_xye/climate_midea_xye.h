@@ -276,6 +276,10 @@ class ClimateMideaXYE : public PollingComponent, public climate::Climate, public
   // Opt-in (sync_fan_mode_from_c0 YAML option): when true, fan_mode is updated from the C0
   // fan_mode byte so HA shows the physical running speed instead of the last commanded mode.
   bool sync_fan_mode_from_c0_{false};
+  // True while the user has selected HEAT_COOL (AUTO) mode in HA.
+  // Kept separately from this->mode so that this->mode can always be updated
+  // from the C0 bus (source of truth) while the auto-switching logic still works.
+  bool heat_cool_active_{false};
   // Outgoing frame addressing (unit_id / master_id YAML options). Defaults match the
   // protocol's typical single-unit values (SERVER_ID / CLIENT_ID = 0x00).
   NodeId server_id_{SERVER_ID};
