@@ -1,6 +1,6 @@
 # Research Summary: XYE Protocol Header Analysis
 
-**Date**: 2026-01-30  
+**Date**: 2026-01-30 (updated 2026-06-10)  
 **Issue**: Research the xye.h header and its usage to document xye headers more
 
 ## Executive Summary
@@ -72,17 +72,22 @@ All message structures validated against wtahler's implementation:
 - ✅ Field positions for mode, fan, temperature
 - ✅ CRC calculation method
 
-### 6. Unknown Fields - No New Conversions
+### 6. Unknown Fields — Partially Resolved
 
 Analyzed all "unknown" fields in receive messages:
 - Bytes 6 and 16 remain unknown
-- Byte 19 is now tracked as a provisional compressor-running flag (`0x01` running, `0x00` idle in observed heat captures)
-- Byte 27 remains hardware-dependent and unknown
-- Bytes 28-29 remain unknown (`unknown5`/`unknown6`); one ducted system held them at `0xE0/0x01`, but wider captures show byte 28 drifting over time
-- No additional information in wtahler's implementation
-- These fields appear unused or reserved
+- **Byte 19** — confirmed as provisional compressor-running flag (`0x01` running, `0x00` idle).
+  Implemented via `compressor_aware_action: true` which uses this flag for HA climate action.
+  **Status**: ✅ Implemented and enabled by default
+- **Byte 27** — hardware-dependent, steady within a given device (`0x00` on PNW ducted HP,
+  `0x14` on C&H CH-36AHU). Likely a capability / model-class byte. **Status**: ⚠️ Unknown
+- **Bytes 28-29** — two candidate interpretations from MidATRIX (May 2026):
+  1. IDU EEV position (16-bit LE) — leading hypothesis; PNW values decode to 430-480 steps
+  2. Oil Return Cycle counter (byte 28 only) — alternative; doesn't fit PNW capture cleanly
+  Both unconfirmed. See PROTOCOL.md "Byte 27-29 observations" for full analysis.
+  **Status**: ⚠️ Hypotheses documented, not yet confirmed
 
-**Status**: ⚠️ Remaining unknown fields still need more cross-hardware validation
+**Status**: ⚠️ Bytes 6, 16, 27 remain unknown; bytes 28-29 have research hypotheses
 
 ## Deliverables
 
@@ -131,27 +136,42 @@ Added references to:
 - ✅ Clarify temperature sensor purposes
 - ✅ Document error flag meanings
 
-### Future Considerations
+### Resolved Since Initial Research (June 2026)
+
+1. **FAN_LOW_ALT (0x03) bug** — Fixed: `get_climate_fan_mode()` now maps `0x03 → LOW`. Native
+   test `test_get_climate_fan_mode.cpp` added to CI.
+
+2. **Byte 15 Current 0xFF** — Resolved: `0xFF` is an IDU sentinel — the IDU does not measure
+   compressor current locally. Current is an ODU-side quantity visible only on the S1/S2 bus
+   (MidATRIX cross-reference confirms this). `current` sensor now commented out in config.
+
+3. **Byte 19 compressor flag** — Implemented: `compressor_aware_action: true` uses this flag
+   to derive the HA climate action from the actual compressor state rather than fan running.
+
+4. **Bytes 28-29** — Two hypotheses documented in PROTOCOL.md v1.2 (MidATRIX, May 2026):
+   IDU EEV position (16-bit LE, leading hypothesis) or Oil Return Cycle counter (alternative).
+   See [PROTOCOL.md Byte 27-29 observations](PROTOCOL.md#byte-27-29-observations).
+
+5. **Fan mode HA vs bus divergence** — Fixed: Added `sync_fan_mode_from_c0` option that reads
+   the physical running speed from C0 byte 9 and updates HA fan_mode. Enabled for units that
+   return `0xC5` on C4 extended query (C4 path `sync_fan_mode_from_device` remains `false`).
+   Logic: `0x00` → no update (idle); bit-7 set → `AUTO`; else → `LOW/MEDIUM/HIGH`.
+
+### Remaining Future Considerations
 
 1. **Protocol Validation Testing**
    - Test with units that use AUTO = 0x91
-   - Test with units that use FAN_LOW = 0x03
    - Verify temperature encoding with both Celsius and Fahrenheit units
 
 2. **Unknown Field Investigation**
-   - Monitor bytes 6, 16, 19, 27-29 for patterns
-   - Compare with additional implementations if they become available
-   - Document any observed patterns in future updates
+   - Bytes 6, 16, 27 still unknown — monitor for patterns across hardware
+   - Bytes 28-29: capture simultaneously with S1/S2 frame `0001_53` bytes 11+12 (EXV
+     step count) to confirm EEV hypothesis, or log over a full ≥45-min compressor +
+     oil-return cycle
 
-3. **Temperature Encoding**
-   - Consider adding unit configuration option for raw vs encoded temperatures
-   - Add auto-detection based on received values
-   - Document regional variations
-
-4. **Current Reading**
-   - Investigate why current (byte 15) reads 0xFF
-   - Determine if different models support actual current measurement
-   - Document findings
+3. **Current Reading**
+   - If a unit model ever reports real current on byte 15 (not `0xFF`), document the
+     scaling factor (S1/S2 reference uses `raw / 3.2` for Compressor_Actual_Amps).
 
 ## Conclusion
 
