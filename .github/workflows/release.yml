@@ -1,7 +1,8 @@
 name: Release
 
 on:
-  workflow_dispatch:  # manual trigger only — re-enable push after setting repo permissions
+  push:
+    branches: [ main ]
 
 permissions:
   contents: write
