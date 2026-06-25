@@ -609,16 +609,16 @@ void ClimateMideaXYE::ParseResponse() {
       const auto &exr = rx_data.message.data.extended_query_response;
       set_sensor(this->outdoor_sensor_, XYEAdapter::get_temperature(exr.outdoor_temperature.value));
       set_number(this->static_pressure_number_, static_cast<float>(STATIC_PRESSURE_VALUE_MASK & exr.static_pressure));
-      // C4 is the sole source for target_temperature, covering both unit modes:
-      //  - Fahrenheit: encoded as (°F + FAHRENHEIT_TEMP_OFFSET); convert to Celsius for ESPHome.
-      //  - Celsius:    raw integer degrees with bit 6 (0x40) status flag; mask before use.
+      // C4 target sync: Fahrenheit units only. Celsius setpoints come from C0 byte 10; many
+      // units return stale or mis-encoded values in C4. Skip while HEAT_COOL (AUTO) is active
+      // — the thermostat owns the setpoint (mirrors C0 path above).
       // Respect post_set_grace_: skip until the C0 grace window has closed so a freshly-sent
       // SET command isn't immediately overwritten by stale device state.
       // Fahrenheit C4 decode approach adapted from rmounce/esphome@xye-units-switch.
       if ((this->mode != ClimateMode::CLIMATE_MODE_OFF || ForceReadNextCycle == 1) &&
-          post_set_grace_ == 0) {
+          post_set_grace_ == 0 && this->use_fahrenheit_ && !heat_cool_active_) {
         const float incoming_target_temp =
-            XYEAdapter::get_target_temperature(exr.target_temperature.value, this->use_fahrenheit_);
+            XYEAdapter::get_target_temperature(exr.target_temperature.value, true);
         update_property(this->target_temperature, incoming_target_temp, need_publish);
       }
       if (need_publish)
