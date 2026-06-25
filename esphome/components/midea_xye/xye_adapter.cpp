@@ -1,4 +1,3 @@
-#ifdef USE_ARDUINO
 
 #include "xye_adapter.h"
 
@@ -188,4 +187,3 @@ bool XYEAdapter::is_defrost_active(uint16_t protect_flags) noexcept {
 }  // namespace midea
 }  // namespace esphome
 
-#endif  // USE_ARDUINO

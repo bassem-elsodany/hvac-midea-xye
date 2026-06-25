@@ -1,6 +1,5 @@
 #pragma once
 
-#ifdef USE_ARDUINO
 
 #include "xye.h"
 
@@ -248,4 +247,3 @@ static_assert(sizeof(ReceiveData) == RX_MESSAGE_LENGTH, "ReceiveData size must m
 }  // namespace midea
 }  // namespace esphome
 
-#endif  // USE_ARDUINO

@@ -1,6 +1,5 @@
 #pragma once
 
-#ifdef USE_ARDUINO
 
 #include "xye.h"
 
@@ -107,4 +106,3 @@ static_assert(sizeof(TransmitData) == TX_MESSAGE_LENGTH, "TransmitData size must
 }  // namespace midea
 }  // namespace esphome
 
-#endif  // USE_ARDUINO

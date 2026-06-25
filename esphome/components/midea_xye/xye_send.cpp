@@ -1,4 +1,3 @@
-#ifdef USE_ARDUINO
 
 #include "xye_send.h"
 #include "xye_log.h"
@@ -73,4 +72,3 @@ void TransmitData::update_crc() noexcept {
 }  // namespace midea
 }  // namespace esphome
 
-#endif  // USE_ARDUINO

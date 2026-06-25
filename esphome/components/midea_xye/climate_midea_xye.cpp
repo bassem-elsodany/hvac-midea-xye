@@ -1,4 +1,3 @@
-#ifdef USE_ARDUINO
 
 #include "climate_midea_xye.h"
 
@@ -875,4 +874,3 @@ void ClimateMideaXYE::update_current_temperature_from_sensors_(bool &need_publis
 }  // namespace midea
 }  // namespace esphome
 
-#endif  // USE_ARDUINO

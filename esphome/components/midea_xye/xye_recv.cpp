@@ -1,4 +1,3 @@
-#ifdef USE_ARDUINO
 
 #include "xye_recv.h"
 #include "xye_adapter.h"
@@ -153,4 +152,3 @@ bool ReceiveData::is_valid() const noexcept {
 }  // namespace midea
 }  // namespace esphome
 
-#endif  // USE_ARDUINO

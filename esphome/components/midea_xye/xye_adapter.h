@@ -1,6 +1,5 @@
 #pragma once
 
-#ifdef USE_ARDUINO
 
 #include "xye.h"
 #include "esphome/components/climate/climate.h"
@@ -102,4 +101,3 @@ struct XYEAdapter {
 }  // namespace midea
 }  // namespace esphome
 
-#endif  // USE_ARDUINO

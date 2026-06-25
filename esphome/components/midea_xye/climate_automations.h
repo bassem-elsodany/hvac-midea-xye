@@ -1,6 +1,5 @@
 #pragma once
 
-#ifdef USE_ARDUINO
 
 #include "esphome/core/automation.h"
 #include "climate_midea_xye.h"
@@ -65,4 +64,3 @@ template<typename... Ts> class PowerToggleAction : public MideaActionBase<Ts...>
 }  // namespace midea
 }  // namespace esphome
 
-#endif  // USE_ARDUINO

@@ -1,6 +1,5 @@
 #pragma once
 
-#ifdef USE_ARDUINO
 
 #include <cstdint>
 #include <map>
@@ -617,4 +616,3 @@ inline uint8_t compute_protocol_crc(const uint8_t *data, uint8_t len) noexcept {
 }  // namespace midea
 }  // namespace esphome
 
-#endif  // USE_ARDUINO

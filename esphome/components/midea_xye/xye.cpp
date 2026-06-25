@@ -1,4 +1,3 @@
-#ifdef USE_ARDUINO
 
 #include "xye.h"
 #include "esphome/core/log.h"
@@ -178,4 +177,3 @@ const std::map<SubsystemFlags, const char*> SUBSYSTEM_FLAGS_MAP = {
 }  // namespace midea
 }  // namespace esphome
 
-#endif  // USE_ARDUINO

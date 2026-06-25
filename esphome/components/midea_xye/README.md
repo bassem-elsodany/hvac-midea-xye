@@ -17,7 +17,7 @@ esphome:
   name: heatpump
   friendly_name: Heatpump
 
-esp8266:  #also works with esp32
+esp8266:  # also works with esp32 (Arduino) and esp32-c6 (esp-idf)
   board: d1_mini
 
 # Enable logging (but not via UART)

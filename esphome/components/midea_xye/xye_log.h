@@ -1,6 +1,5 @@
 #pragma once
 
-#ifdef USE_ARDUINO
 
 #include <cstdio>
 #include <cstdint>
@@ -29,4 +28,3 @@ inline void log_frame_hex(const char *tag, const char *arrow, const uint8_t *dat
 }  // namespace midea
 }  // namespace esphome
 
-#endif  // USE_ARDUINO
