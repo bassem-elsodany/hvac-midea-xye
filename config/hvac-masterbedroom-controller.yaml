@@ -1,0 +1,567 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# ESPHome config — Midea XYE ducted heat pump via RS-485 (ESP32-C6, Wi-Fi only)
+# One file per ESP. Copy to HA /config/esphome/, edit substitutions block +
+# api.encryption.key uses shared hvac_encryption_key (see secrets.yaml.example)
+#
+# ESP32-C6 nanoESP32-C6 (Muse Lab) notes:
+# • framework: esp-idf (required on C6)
+# • RS-485 on GPIO4/GPIO5 — CH343 USB logging stays on GPIO16/17 (separate UART)
+# • Wi-Fi always on — power_save_mode NONE + IDF PM disabled (no modem/light sleep)
+# • OTA works over Wi-Fi after first USB flash
+# • Follow-Me imports a Zigbee/BLE room sensor from HA via ESPHome API
+#
+# Board pinout (USB ports on LEFT, antenna on RIGHT):
+#
+#                         ANTENNA →
+#   ┌──[CH343 USB]────────────────────────────────────────────┐
+#   │ [BOOT]                                                   │
+#   │                                                          │
+#   │  TOP ROW (silkscreen, left → right):                     │
+#   │  5V 13 12 11 10  8  1  0  7  6  [5] [4] RST 3V3 GND     │
+#   │                                  ▲   ▲                   │
+#   │                               GPIO5 GPIO4                │
+#   │                               uart_rx uart_tx            │
+#   │                               → RO    → DI  (RS-485)     │
+#   │                                                          │
+#   │  BOTTOM ROW (left → right):                              │
+#   │  5V GND  9 18 19 20 21 22 23 15  RX  TX   3  2  GND      │
+#   │                                  ▲   ▲                   │
+#   │                               GPIO17 GPIO16              │
+#   │                               (CH343 USB — do NOT use)   │
+#   │ [RST]                                                    │
+#   └──[ESP32 USB]─────────────────────────────────────────────┘
+#
+# RS-485 wiring:
+#   pin "4" (GPIO4 / uart_tx) ──► RS-485 DI
+#   pin "5" (GPIO5 / uart_rx) ◄── RS-485 RO
+#   GND                       ──► RS-485 GND
+#   3V3                       ──► RS-485 VCC (3.3 V modules only)
+#
+# Connectivity diagnostics (when HA loses the device):
+#   • Last Boot timestamp changed + Uptime near 0  → reboot or power cycle
+#   • Reset Reason = power-on event                → unplugged / power lost
+#   • Reset Reason = watchdog / software           → crash or OTA / restart
+#   • Last Boot unchanged + Last Event = Wi-Fi lost  → Wi-Fi drop (ESP still ran)
+#   • Boot Count only increments on actual reboots
+#   • Wi-Fi offline ≥ wifi_reboot_after (default 5min) → software reboot (watchdog)
+# ══════════════════════════════════════════════════════════════════════════════
+
+substitutions:
+  # ════════════════════════════════════════
+  # PER-ROOM — change these when copying to a new ESP module
+  # ════════════════════════════════════════
+
+  # ESP mDNS hostname — must be unique per device (no spaces, lowercase-kebab)
+  name: "hvac-masterbedroom-controller"
+
+  # Label shown in HA UI for all entities from this device
+  friendly_name: "masterbedroom HVAC Controller"
+
+  # Free-text comment visible in ESPHome dashboard
+  comment: "ESPHome ESP32-C6 RS-485 — masterbedroom ducted heat pump"
+
+  # Short slug used in sensor entity IDs and the fallback AP SSID
+  room_id: "masterbedroom"
+
+  # Static IP assigned to this ESP — must be unique per device
+  ip_address: "10.0.20.171"
+
+  # HA entity_id of a Zigbee / BLE temperature sensor in the same room.
+  # Used for Follow-Me: the AC uses this reading instead of its internal sensor.
+  follow_me_entity: "sensor.zigbee_temp_masterbedroom_temperature"
+
+  # Climate entity name shown in HA (keep consistent with `name`)
+  climate_name: "hvac-masterbedroom-controller"
+
+  # Climate entity id used internally by ESPHome (underscores, no hyphens)
+  climate_name_id: "hvac_masterbedroom_controller"
+
+  # Target temperature slider limits in the HA climate card (visual only —
+  # the AC itself enforces its own hardware min/max)
+  temp_min: "20"   # °C
+  temp_max: "26"   # °C
+
+  # ════════════════════════════════════════
+  # SHARED — same on every ESP (rarely need changing)
+  # ════════════════════════════════════════
+
+  # Router gateway and subnet for the static IP above
+  wifi_gateway: "10.0.20.1"
+  wifi_subnet: "255.255.255.0"
+
+  # RS-485 on nanoESP32-C6 — see board diagram in file header and uart: block below.
+  #   pin "4" (GPIO4 / tx) → RS-485 DI
+  #   pin "5" (GPIO5 / rx) ← RS-485 RO
+
+  # XYE bus addressing (single-unit installations: both 0x00)
+  # unit_id   = destination address of the indoor unit (0x00..0x3F or 0xFF broadcast)
+  # master_id = source address this ESP advertises as the CCM/controller (0x00..0x3F)
+  unit_id: "0x00"
+  master_id: "0x00"
+
+  # Component log level — use DEBUG during commissioning, INFO in production
+  midea_xye_log: "INFO"
+
+  # Reboot if STA Wi-Fi stays down this long (fallback AP alone does not recover HA)
+  wifi_reboot_after: "5min"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ESPHome core
+# ──────────────────────────────────────────────────────────────────────────────
+esphome:
+  name: ${name}
+  name_add_mac_suffix: false
+  friendly_name: ${friendly_name}
+  comment: ${comment}
+  on_boot:
+    priority: 800
+    then:
+      - lambda: |-
+          id(boot_count) += 1;
+          id(connectivity_event_text) = "Boot #" + to_string(id(boot_count));
+      - component.update: last_connectivity_event
+
+esp32:
+  board: esp32-c6-devkitc-1   # nanoESP32-C6 — no dedicated ESPHome board ID; same ESP32-C6 chip
+  variant: esp32c6
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_PM_ENABLE: n                              # no CPU light-sleep / DFS
+      CONFIG_ESP_WIFI_STA_DISCONNECTED_PM_ENABLE: n    # keep radio up when Wi-Fi drops
+      CONFIG_FREERTOS_USE_TICKLESS_IDLE: n             # no idle tickless sleep
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Logging — CH343 USB serial stays enabled (RS-485 uses GPIO4/5, not GPIO16/17).
+# Logs also stream through the ESPHome API dashboard after Wi-Fi connects.
+# Only set baud_rate: 0 if RS-485 shares the same UART as the logger.
+# ──────────────────────────────────────────────────────────────────────────────
+logger:
+  level: INFO
+  logs:
+    midea_xye: ${midea_xye_log}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Home Assistant API — encrypted; shared key for all HVAC ESPs (see secrets.yaml.example)
+# Generate once: openssl rand -base64 32
+# ──────────────────────────────────────────────────────────────────────────────
+api:
+  reboot_timeout: 0s
+  encryption:
+    key: !secret hvac_encryption_key
+
+time:
+  - platform: homeassistant
+    id: ha_time
+    on_time_sync:
+      then:
+        - lambda: |-
+            if (id(connectivity_event_text).find('@') != std::string::npos) return;
+            if (!id(ha_time).now().is_valid()) return;
+            id(connectivity_event_text) += " @ " +
+                id(ha_time).now().strftime("%Y-%m-%d %H:%M:%S");
+        - component.update: last_connectivity_event
+
+globals:
+  - id: boot_count
+    type: uint32_t
+    restore_value: yes
+    initial_value: "0"
+  - id: wifi_disconnect_count
+    type: uint32_t
+    restore_value: yes
+    initial_value: "0"
+  - id: connectivity_event_text
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+
+debug:
+  update_interval: 60s
+
+# ──────────────────────────────────────────────────────────────────────────────
+# OTA (over-the-air) firmware updates — works over Wi-Fi after first USB flash
+# ──────────────────────────────────────────────────────────────────────────────
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Wi-Fi — static IP; radio always on (no modem sleep). Required for reliable HA/API.
+# power_save_mode NONE  → Wi-Fi PS disabled (default on ESP32 is LIGHT sleep).
+# fast_connect          → skip full scan on reconnect (OK with static IP + fixed AP).
+# reboot_timeout        → reboot if STA never connects (AP fallback can block this;
+#                         wifi_offline_reboot script below is the reliable path).
+# ──────────────────────────────────────────────────────────────────────────────
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  use_address: ${ip_address}
+  power_save_mode: NONE
+  fast_connect: true
+  reboot_timeout: ${wifi_reboot_after}
+  manual_ip:
+    static_ip: ${ip_address}
+    gateway: ${wifi_gateway}
+    subnet: ${wifi_subnet}
+  ap:
+    ssid: "hvac-${room_id}-setup"
+    password: !secret access_point_password
+  on_connect:
+    - script.stop: wifi_offline_reboot
+    - lambda: |-
+        id(connectivity_event_text) = "Wi-Fi connected";
+        if (id(ha_time).now().is_valid()) {
+          id(connectivity_event_text) += " @ " +
+              id(ha_time).now().strftime("%Y-%m-%d %H:%M:%S");
+        }
+    - component.update: last_connectivity_event
+  on_disconnect:
+    - script.execute: wifi_offline_reboot
+    - lambda: |-
+        id(wifi_disconnect_count) += 1;
+        id(connectivity_event_text) = "Wi-Fi lost";
+        if (id(ha_time).now().is_valid()) {
+          id(connectivity_event_text) += " @ " +
+              id(ha_time).now().strftime("%Y-%m-%d %H:%M:%S");
+        }
+    - component.update: last_connectivity_event
+
+# If STA Wi-Fi stays down for wifi_reboot_after, software-reboot.
+# Needed because the fallback AP often prevents wifi.reboot_timeout from firing,
+# leaving the ESP reachable only via its setup hotspot until a power cycle.
+script:
+  - id: wifi_offline_reboot
+    mode: restart
+    then:
+      - delay: ${wifi_reboot_after}
+      - if:
+          condition:
+            not:
+              wifi.connected:
+          then:
+            - logger.log:
+                level: WARN
+                format: "Wi-Fi offline for ${wifi_reboot_after} — rebooting to recover STA"
+            - button.press: device_restart
+
+captive_portal:
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Local web server — browse to http://<ip_address> for a quick status page
+# ──────────────────────────────────────────────────────────────────────────────
+#web_server:
+#  port: 80
+#  auth:
+#    username: !secret web_server_username
+#    password: !secret web_server_password
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Custom midea_xye component (ESP-IDF support on ESP32-C6).
+# refresh: always ensures the git repo is re-fetched on every build so that
+# fixes pushed to main are picked up without changing the ref.
+# ──────────────────────────────────────────────────────────────────────────────
+external_components:
+  - source:
+      type: git
+      url: https://github.com/bassem-elsodany/hvac-midea-xye
+      ref: main
+    refresh: always
+    components: [midea_xye]
+
+# ──────────────────────────────────────────────────────────────────────────────
+# UART — RS-485 bus (Midea XYE protocol: 4800 8N1 half-duplex)
+# Auto-direction RS-485 module (e.g. MAX3485 with auto-switch): no flow_control_pin needed.
+# The debug block dumps raw frames to the log — comment out for production.
+# ──────────────────────────────────────────────────────────────────────────────
+uart:
+  tx_pin:
+    number: GPIO4
+    ignore_strapping_warning: true   # nanoESP32-C6 pin "4" — RS-485 DI; strapping OK as output
+  rx_pin:
+    number: GPIO5
+    ignore_strapping_warning: true   # nanoESP32-C6 pin "5" — RS-485 RO; high-Z input
+  baud_rate: 4800
+  # Raw bus frame hex dump — useful during commissioning; comment out for production:
+  # debug:
+  #   direction: BOTH
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Sensors
+# ──────────────────────────────────────────────────────────────────────────────
+sensor:
+  # Follow-Me: import a Zigbee/BLE room temperature sensor from HA.
+  # The AC uses this reading (via FOLLOW_ME frames) instead of its internal T1.
+  - platform: homeassistant
+    id: ${room_id}_follow_me
+    entity_id: ${follow_me_entity}
+    name: "${friendly_name} Follow-Me"
+
+  # Wi-Fi signal strength — drops before disconnect; compare with Last Event
+  - platform: wifi_signal
+    name: "${friendly_name} Wi-Fi Signal"
+    update_interval: 60s
+    entity_category: DIAGNOSTIC
+
+  # Last boot wall-clock time (single uptime sensor — do not add a second uptime: block)
+  - platform: uptime
+    id: uptime_boot
+    name: "${friendly_name} Last Boot"
+    type: timestamp
+    entity_category: DIAGNOSTIC
+    icon: mdi:restart
+
+  # Total reboots since first flash (persists across reboots)
+  - platform: template
+    name: "${friendly_name} Boot Count"
+    lambda: return id(boot_count);
+    entity_category: DIAGNOSTIC
+    update_interval: 60s
+    icon: mdi:counter
+
+  # Wi-Fi drop events while ESP kept running (persists across reboots)
+  - platform: template
+    name: "${friendly_name} Wi-Fi Disconnect Count"
+    lambda: return id(wifi_disconnect_count);
+    entity_category: DIAGNOSTIC
+    update_interval: 60s
+    icon: mdi:wifi-off
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Binary sensors — live link state (only visible while HA can reach the ESP)
+# ──────────────────────────────────────────────────────────────────────────────
+binary_sensor:
+  - platform: status
+    name: "${friendly_name} API Connected"
+    entity_category: DIAGNOSTIC
+  - platform: template
+    name: "${friendly_name} Wi-Fi Connected"
+    entity_category: DIAGNOSTIC
+    lambda: return wifi::global_wifi_component->is_connected();
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Text sensors
+# ──────────────────────────────────────────────────────────────────────────────
+text_sensor:
+  - platform: template
+    name: "${friendly_name} Uptime"
+    icon: mdi:clock-start
+    entity_category: DIAGNOSTIC
+    lambda: |-
+      if (!id(uptime_boot).has_state() || !id(ha_time).now().is_valid()) return {};
+      int32_t elapsed = (int32_t) (id(ha_time).now().timestamp - id(uptime_boot).state);
+      if (elapsed < 0) elapsed = 0;
+      uint32_t t = (uint32_t) elapsed;
+      uint32_t d = t / 86400u;
+      t %= 86400u;
+      uint32_t h = t / 3600u;
+      t %= 3600u;
+      uint32_t m = t / 60u;
+      uint32_t s = t % 60u;
+      return str_sprintf("%ud %uh %um %us",
+          (unsigned) d, (unsigned) h, (unsigned) m, (unsigned) s);
+    update_interval: 60s
+
+  - platform: template
+    id: last_connectivity_event
+    name: "${friendly_name} Last Connectivity Event"
+    icon: mdi:information-outline
+    entity_category: DIAGNOSTIC
+    lambda: return id(connectivity_event_text);
+
+  - platform: debug
+    reset_reason:
+      name: "${friendly_name} Reset Reason"
+      entity_category: DIAGNOSTIC
+      icon: mdi:alert-circle-outline
+
+  - platform: wifi_info
+    ip_address:
+      name: "${friendly_name} IP Address"
+      entity_category: DIAGNOSTIC
+    ssid:
+      name: "${friendly_name} Wi-Fi SSID"
+      entity_category: DIAGNOSTIC
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Climate entity — Midea XYE heat pump
+# ──────────────────────────────────────────────────────────────────────────────
+climate:
+  - platform: midea_xye
+    name: ${climate_name}
+    id: ${climate_name_id}
+
+    # XYE bus addressing (see substitutions above)
+    unit_id: ${unit_id}
+    master_id: ${master_id}
+
+    # How often the ESP polls the AC with a C0 QUERY frame
+    period: 1s
+
+    # How long to wait for the AC to reply before giving up
+    timeout: 100ms
+
+    # Temperature unit sent on the XYE bus — keep false (Celsius) for most units
+    use_fahrenheit: false
+
+    # Emit a beep on the AC when a command is received from HA
+    beeper: true
+
+    # When true: HA climate action (heating/cooling/idle) is derived from the C0 byte-19
+    # compressor-running flag + defrost bit — more accurate than "fan running implies active".
+    compressor_aware_action: true
+
+    # C4 extended query fan sync — this unit returns 0xC5 (C4 not supported), so keep false.
+    # Set true only if your unit responds to C4 QUERY_EXTENDED (0xC4) with valid data.
+    sync_fan_mode_from_device: false
+
+    # C0 fan mode sync — reads physical running speed from C0 byte 9 every poll cycle.
+    # Fixes the "HA shows AUTO, runtime shows MEDIUM" divergence on units without C4 support.
+    # Logic: 0x00 (fan idle) → no update; bit-7 set → AUTO; else → LOW/MEDIUM/HIGH.
+    sync_fan_mode_from_c0: true
+
+    # Temperature slider limits in the HA UI (cosmetic — does not limit what the AC accepts)
+    visual:
+      min_temperature: ${temp_min} °C
+      max_temperature: ${temp_max} °C
+      temperature_step: 1.0 °C
+
+    # AC operating modes exposed in HA
+    # HEAT_COOL = thermostat AUTO: ESP decides HEAT or COOL based on room vs setpoint
+    supported_modes:
+      - FAN_ONLY
+      - HEAT_COOL
+      - COOL
+      - HEAT
+      - DRY
+
+    # Follow-Me: reference to the imported HA temperature sensor defined above
+    follow_me_sensor: ${room_id}_follow_me
+
+    # ── C0 QUERY response trace sensors ────────────────────────────────────────
+    # These expose raw bus fields as HA sensors for diagnostics.
+    # All C0 byte offsets are from PROTOCOL.md "Receive Messages" table.
+
+    # Byte 11 — T1: internal/room air temperature (same as climate current_temperature
+    # when no Follow-Me sensor is available)
+    internal_current_temperature:
+      name: "C0 T1 Room Temp"
+
+    # Byte 10 — target setpoint as reported by the AC (raw Celsius, bit-6 masked)
+    bus_target_temperature:
+      name: "C0 Bus Setpoint"
+
+    # Byte 8 — current operation mode byte (raw hex value)
+    bus_operation_mode:
+      name: "C0 Operation Mode Raw"
+
+    # Byte 8 — current operation mode decoded as text (e.g. "136 (COOL)")
+    bus_operation_mode_text:
+      name: "C0 Operation Mode"
+
+    # Byte 9 — fan mode byte (raw hex; bit-7 = AUTO flag, lower nibble = physical speed)
+    bus_fan_mode:
+      name: "C0 Fan Mode Raw"
+
+    # Byte 9 — fan mode decoded as text (e.g. "130 (AUTO+MED)")
+    bus_fan_mode_text:
+      name: "C0 Fan Mode"
+
+    # Byte 7 — unit capability flags (raw)
+    capabilities:
+      name: "C0 Capabilities Raw"
+
+    # Byte 7 — capabilities decoded as text (e.g. "EXTERNAL_TEMP | SWING")
+    capabilities_text:
+      name: "C0 Capabilities"
+
+    # Byte 20 — special mode flags (ECO, AUX_HEAT, SWING, VENTILATION)
+    mode_flags:
+      name: "C0 Mode Flags"
+
+    # Byte 21 — operation status flags (WATER_PUMP, WATER_LOCK)
+    operation_flags:
+      name: "C0 Operation Flags"
+
+    # Byte 12 — T2A: indoor coil inlet temperature (refrigerant entering evaporator)
+    temperature_2a:
+      name: "C0 T2A Coil Inlet"
+
+    # Byte 13 — T2B: indoor coil outlet temperature (refrigerant leaving evaporator)
+    temperature_2b:
+      name: "C0 T2B Coil Outlet"
+
+    # Byte 14 — T3: outdoor coil / ambient temperature
+    temperature_3:
+      name: "C0 T3 Outdoor Coil"
+
+    # Bytes 17-18 — timer start/stop settings (raw flag bitmask)
+    timer_start:
+      name: "C0 Timer Start"
+    timer_stop:
+      name: "C0 Timer Stop"
+
+    # Bytes 22-23 — E1/E2 error code flags (16-bit; non-zero means a fault code)
+    error_flags:
+      name: "C0 Error Flags"
+
+    # Bytes 24-25 — protection flags (bit 0x0002 = defrost cycle active)
+    protect_flags:
+      name: "C0 Protect Flags"
+
+    # Byte 26 — CCM communication error flags (timeout, CRC error, protocol error)
+    ccm_error_flags:
+      name: "C0 CCM Error Flags"
+
+    # Byte 9 lower nibble — physical fan speed ordinal (0=off, 1=high, 2=med, 4=low)
+    fan_speed:
+      name: "C0 Fan Speed Level"
+
+    # Byte 6 — unknown field (possibly capabilities-related; 0x30 observed)
+    unknown1:
+      name: "C0 Unknown1"
+
+    # Byte 16 — unknown field
+    unknown2:
+      name: "C0 Unknown2"
+
+    # Byte 27 — hardware-dependent steady value (0x00 or 0x14 observed across units)
+    unknown4:
+      name: "C0 Unknown4"
+
+    # Byte 28 — drifts slowly; leading hypothesis: IDU EEV step count low byte
+    unknown5:
+      name: "C0 Unknown5"
+
+    # Byte 29 — steady per unit; leading hypothesis: IDU EEV step count high byte
+    unknown6:
+      name: "C0 Unknown6"
+
+    # Byte 19 bit + protect_flags bit 0x0002 — defrost cycle binary sensor
+    defrost:
+      name: "C0 Defrost Active"
+
+    # Byte 19 — provisional compressor-running flag (0x01 running, 0x00 idle)
+    compressor_active:
+      name: "C0 Compressor Run Flag"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Buttons
+# ──────────────────────────────────────────────────────────────────────────────
+button:
+  - platform: restart
+    id: device_restart
+    name: "${friendly_name} Reboot"
+    entity_category: config
+    icon: mdi:restart
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Internal switch — tracks RS-485 bus state (used internally by component)
+# ──────────────────────────────────────────────────────────────────────────────
+switch:
+  - platform: template
+    name: "RS485 Active"
+    id: rs485_active
+    optimistic: true
+    internal: true
+    restore_mode: ALWAYS_ON

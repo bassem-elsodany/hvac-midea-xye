@@ -94,7 +94,7 @@ logger:
 # Home Assistant native API — climate entity + all diagnostic sensors.
 api:
   encryption:
-    key: !secret hvac_living__encryption_key
+    key: !secret hvac_encryption_key
 
 ota:
   - platform: esphome

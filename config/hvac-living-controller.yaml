@@ -6,7 +6,7 @@
 
 substitutions:
   # ════════════════════════════════════════
-  # PER-ROOM — change these when copying to a new ESP
+  # PER-ROOM — change these when copying to a new ESP module
   # ════════════════════════════════════════
 
   # ESP mDNS hostname — must be unique per device (no spaces, lowercase-kebab)
@@ -16,7 +16,7 @@ substitutions:
   friendly_name: "Living HVAC Controller"
 
   # Free-text comment visible in ESPHome dashboard
-  comment: "ESPHome ESP32 RS-485 — living room ducted heat pump"
+  comment: "ESPHome ESP32 RS-485 — living ducted heat pump"
 
   # Short slug used in sensor entity IDs and the fallback AP SSID
   room_id: "living"
@@ -60,7 +60,10 @@ substitutions:
   master_id: "0x00"
 
   # Component log level — use DEBUG during commissioning, INFO in production
-  midea_xye_log: "DEBUG"
+  midea_xye_log: "INFO"
+
+  # Reboot if STA Wi-Fi stays down this long (fallback AP alone does not recover HA)
+  wifi_reboot_after: "5min"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # ESPHome core
@@ -86,12 +89,13 @@ logger:
     midea_xye: ${midea_xye_log}
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Home Assistant API — encrypted; generate a unique key per room in secrets.yaml
-# e.g.  hvac_living__encryption_key: "<openssl rand -base64 32 output>"
+# Home Assistant API — encrypted; shared key for all HVAC ESPs (see secrets.yaml.example)
+# Generate once: openssl rand -base64 32
 # ──────────────────────────────────────────────────────────────────────────────
 api:
+  reboot_timeout: 0s
   encryption:
-    key: !secret hvac_living__encryption_key   # ← change secret name per room
+    key: !secret hvac_encryption_key
 
 # ──────────────────────────────────────────────────────────────────────────────
 # OTA (over-the-air) firmware updates
@@ -103,11 +107,15 @@ ota:
 # ──────────────────────────────────────────────────────────────────────────────
 # Wi-Fi — static IP so HA can reliably reach the ESP after restarts
 # Fallback AP activates when Wi-Fi is unreachable (captive portal below)
+# reboot_timeout alone is unreliable with AP fallback — wifi_offline_reboot
+# script reboots after wifi_reboot_after if STA stays down.
 # ──────────────────────────────────────────────────────────────────────────────
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
   use_address: ${ip_address}
+  power_save_mode: NONE
+  reboot_timeout: ${wifi_reboot_after}
   manual_ip:
     static_ip: ${ip_address}
     gateway: ${wifi_gateway}
@@ -115,17 +123,39 @@ wifi:
   ap:
     ssid: "hvac-${room_id}-setup"            # fallback AP SSID
     password: !secret access_point_password
+  on_connect:
+    - script.stop: wifi_offline_reboot
+  on_disconnect:
+    - script.execute: wifi_offline_reboot
+
+# If STA Wi-Fi stays down for wifi_reboot_after, software-reboot.
+# Needed because the fallback AP often prevents wifi.reboot_timeout from firing,
+# leaving the ESP reachable only via its setup hotspot until a power cycle.
+script:
+  - id: wifi_offline_reboot
+    mode: restart
+    then:
+      - delay: ${wifi_reboot_after}
+      - if:
+          condition:
+            not:
+              wifi.connected:
+          then:
+            - logger.log:
+                level: WARN
+                format: "Wi-Fi offline for ${wifi_reboot_after} — rebooting to recover STA"
+            - button.press: device_restart
 
 captive_portal:  # serves a web form to enter Wi-Fi credentials in AP mode
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Local web server — browse to http://<ip_address> for a quick status page
 # ──────────────────────────────────────────────────────────────────────────────
-web_server:
-  port: 80
-  auth:
-    username: !secret web_server_username
-    password: !secret web_server_password
+#web_server:
+#  port: 80
+#  auth:
+#    username: !secret web_server_username
+#    password: !secret web_server_password
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Custom midea_xye component from this fork.
@@ -150,8 +180,8 @@ uart:
   rx_pin: ${uart_rx}
   baud_rate: 4800
   # Raw bus frame hex dump — useful during commissioning; comment out for production:
-  debug:
-    direction: BOTH
+#  debug:
+#    direction: BOTH
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Sensors
@@ -168,7 +198,8 @@ sensor:
   - platform: wifi_signal
     name: "${friendly_name} Wi-Fi Signal"
     update_interval: 60s
-
+    entity_category: DIAGNOSTIC
+    
   # Uptime in seconds (internal — used to compute Uptime Days below)
   - platform: uptime
     name: "Uptime"
@@ -345,6 +376,16 @@ climate:
     # Byte 19 — provisional compressor-running flag (0x01 running, 0x00 idle)
     compressor_active:
       name: "C0 Compressor Run Flag"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Buttons
+# ──────────────────────────────────────────────────────────────────────────────
+button:
+  - platform: restart
+    id: device_restart
+    name: "${friendly_name} Reboot"
+    entity_category: config
+    icon: mdi:restart
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Internal switch — tracks RS-485 bus state (used internally by component)

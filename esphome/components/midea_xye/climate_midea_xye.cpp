@@ -763,8 +763,8 @@ climate::ClimateTraits ClimateMideaXYE::traits() {
 
 void ClimateMideaXYE::dump_config() {
   ESP_LOGCONFIG(Constants::TAG, "MideaXYE:");
-  ESP_LOGCONFIG(Constants::TAG, "  [x] Period: %dms", this->get_update_interval());
-  ESP_LOGCONFIG(Constants::TAG, "  [x] Response timeout: %dms", this->response_timeout);
+  ESP_LOGCONFIG(Constants::TAG, "  [x] Period: %dms", (int) this->get_update_interval());
+  ESP_LOGCONFIG(Constants::TAG, "  [x] Response timeout: %dms", (int) this->response_timeout);
   ESP_LOGCONFIG(Constants::TAG, "  [x] Use Fahrenheit: %d", this->use_fahrenheit_);
 
 #ifdef USE_REMOTE_TRANSMITTER
